@@ -137,24 +137,39 @@ One JSON file:
 
 ```js
 {
-  version: 1, id, createdAt,
+  version: 1, id, createdAt, seq: {},
   settings: {
-    accentMode: 'standard',           // | 'alert'
-    digest: { enabled: true, time: '07:30' },
-    eventLeadMin: 15,                 // default; per-event override
+    accentMode: 'standard',                  // | 'alert'
+    digest: { enabled: true, timeMin: 450 }, // minutes from midnight; 450 = 07:30
+    eventLeadMin: 15,                        // default lead; per-event override
   },
-  projects: [{ id, name, colour, archived }],
-  tasks:    [{ id, name, project, status, due, priority, notes, archived, doneAt }],
-  routines: [{ id, name, rule, time, steps: [], archived }],
-  events:   [{ id, name, dateKey, time, endTime, span, rule, notes, leadMin, archived }],
-  dismissed: { /* notificationKey → timestamp; clears one occurrence from TODAY
-                  for the rest of the day without archiving the record itself */ },
+  projects: [{ id, ref, name, colour, archived, createdAt }],
+  tasks:    [{ id, ref, name, project, status, dueKey, priority,
+               detail, archived, createdAt, doneAt }],
+  routines: [{ id, ref, name, rule, timeMin, steps: [], archived, createdAt }],
+  events:   [{ id, ref, name, detail, rule, startMin, endMin, spanDays,
+               leadMin, archived, createdAt }],
+  dismissals: [ 'evt_x:2026-08-31:today', 'rtn_y:2026-08-31' ],
 }
 ```
 
+**Field names follow the harvested modules, not fresh invention.** `routines.js`
+and `events.js` are being ported close to verbatim, so their conventions are
+authoritative: times are `timeMin` / `startMin` / `endMin` in minutes from local
+midnight, never strings; a multi-day event is `spanDays`; free text is `detail`;
+date keys are `"YYYY-MM-DD"` strings built from local components. `dismissals` is
+a flat **array** of keys (`<id>:<dateKey>` or `<id>:<dateKey>:<when>`), consumed
+as a Set, and pruned by `pruneDismissals()` so it cannot grow for the life of the
+document.
+
+Two genuinely new fields: `leadMin` on events (null means fall back to
+`settings.eventLeadMin`), and `dueKey` on tasks. `teamsLink` is dropped from
+`EVENT_FIELDS`.
+
 `rule` on routines and events is `recurrence.js`'s existing shape, unchanged:
-`once` / `daily` / `weekly` / `monthly`. Status is `todo` / `doing` / `done`.
-Priority is `low` / `normal` / `high`.
+`once` / `daily` / `weekly` / `monthly`, with `from`/`until` bounds and skip-not-
+clamp semantics for awkward dates. Status is `todo` / `doing` / `done`. Priority
+is `low` / `normal` / `high`.
 
 Every collection carries `archived`; nothing is hard-deleted. This matters more
 on a phone than on a desktop because there is no keyboard undo stack to fall back
@@ -176,6 +191,16 @@ document, following the reference's pattern.
 Per-task reminders are deliberately **not** included; tasks reach you through the
 digest. This keeps the notification volume low enough that the notifications stay
 worth reading.
+
+### Panel logic and scheduling logic are separate
+
+The reference's `activeRoutines()` and `eventNotifications()` answer *"what
+should be on screen now"* — today only for routines, today and tomorrow for
+events. They are the right input for the TODAY screen and the wrong input for
+`AlarmManager`, which needs *"at what future instants should something fire"*.
+`schedule.js` is therefore new logic built directly on `recurrence.js`'s
+`occursOn()`, not a wrapper around the panel functions. Both ship; they answer
+different questions.
 
 ### Rolling 14-day window
 
@@ -216,13 +241,16 @@ Four, with navigation at the bottom where thumbs are.
   with their steps, today's events on a time spine, tasks due today or overdue.
   This is the daily digest rendered as a screen; the notification is a pointer to
   it.
-- **TASKS** — grouped by project, collapsible. Swipe right to complete,
-  long-press to open. Filter chips for project and status, in place of a saved
+- **TASKS** — grouped by project. A square check control completes a task; the
+  name opens it. Explicitly *not* swipe-to-complete or long-press-to-open:
+  both are invisible until discovered, neither is reachable by assistive tech,
+  and both are awkward to test. Filter chips (Open / All) stand in for a saved
   views system.
 - **CALENDAR** — month grid, tap a day for its events. Compact enough that a
   month fits without scrolling.
-- **SETTINGS** — reached from the app bar, not a tab. Digest time, default lead
-  time, notification permission state, accent mode, export/import.
+- **SETTINGS** — the fourth tab. With only four destinations a tab costs
+  nothing, while an app-bar icon costs a tap and a guess. Digest time, default
+  lead time, notification permission state, accent mode, export/import.
 
 ## Visual design
 
