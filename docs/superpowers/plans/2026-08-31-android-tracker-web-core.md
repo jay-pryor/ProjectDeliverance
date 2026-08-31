@@ -385,10 +385,16 @@ test('fonts are self-hosted, never fetched from Google', async () => {
   assert.match(css, /IBM Plex/);
 });
 
-test('no banned typeface appears anywhere', async () => {
+test('no banned typeface is used in a font stack', async () => {
   const css = await readFile(CSS, 'utf8');
+  // Scoped to font-family declarations on purpose. A bare substring search
+  // false-positives on any capitalised word containing one of these — "Inter"
+  // inside "Internet" in a vendor comment would fail a correct stylesheet.
+  const stacks = css.match(/font-family:[^;}]*/g) || [];
   for (const banned of ['Inter', 'Roboto', 'Open Sans', 'Lato']) {
-    assert.ok(!css.includes(banned), `${banned} is banned by ui-design.md`);
+    const re = new RegExp(`\\b${banned}\\b`);
+    const hit = stacks.find((stack) => re.test(stack));
+    assert.ok(!hit, `${banned} is banned by ui-design.md — found in: ${hit}`);
   }
 });
 ```
@@ -4503,7 +4509,7 @@ git commit -m "feat(ui): routines on TODAY with steps, dismissal and editor"
 - Test: `test/core/schedule.test.js`
 
 **Interfaces:**
-- Consumes: `recurrence.js` — `occursOn`; `routines.js` — `liveRoutines`, `routineKey`; `events.js` — `liveEvents`, `spanOf`; `tasks.js` — `liveTasks`, `dueState`; `time.js` — `todayKey`, `addDays`, `parseDateKey`, `minutesToLabel`.
+- Consumes: `recurrence.js` — `occursOn`; `routines.js` — `liveRoutines`, `routineKey`; `events.js` — `liveEvents`; `tasks.js` — `liveTasks`, `dueState`; `time.js` — `todayKey`, `addDays`, `parseDateKey`, `minutesToLabel`.
 - Produces:
   - `WINDOW_DAYS = 14`
   - `CHANNELS = { ROUTINES: 'routines', EVENTS: 'events', DIGEST: 'digest' }`
