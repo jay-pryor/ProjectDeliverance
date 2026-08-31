@@ -1,2 +1,96 @@
-:root { --void: #0A0C10; }
-body { margin: 0; background: var(--void); }
+/**
+ * The fixed palette, from reference/ui-design.md. Do not add decorative
+ * colours, gradients between unrelated hues, or per-section theming.
+ *
+ * Retyping these values into another file is how they drift, so this is the one
+ * home for them.
+ */
+
+:root {
+  --void:       #0A0C10;  /* page background — near-black, never pure #000 */
+  --panel:      #12161D;  /* raised surfaces, panels, headers */
+  --panel-alt:  #171C25;  /* hover states, alternating rows */
+  --rule:       #1E2530;  /* hairline borders and dividers */
+  --text:       #C8D2DC;  /* primary text — cool off-white, never pure #FFF */
+  --text-dim:   #7B8492;  /* labels, captions — 4.52:1 on --panel-alt */
+  --accent:     #57C7E3;  /* holo-cyan — the ONE accent */
+  --accent-dim: #2A6B7D;  /* accent at rest: borders, inactive indicators */
+
+  /* Semantic. Exempt from the palette, but only where the colour itself
+     carries meaning: status, priority, severity, validation. */
+  --ok:   #4FA97B;
+  --warn: #D89B3C;
+  --crit: #D45D5D;
+  --info: #57C7E3;  /* info and "live" are the same signal here */
+
+  /* Bare triplets for the Phase-5 accent FX, which needs rgba() with a runtime
+     alpha and cannot decompose a hex at speed. */
+  --rgb-standard: 87, 199, 227;
+  --rgb-alert: 255, 90, 71;
+
+  --font-label: 'IBM Plex Sans Condensed', system-ui, sans-serif;
+  --font-body:  'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono:  'IBM Plex Mono', ui-monospace, monospace;
+
+  --tap: 44px;          /* minimum touch target — overrides density guidance */
+  --step: 80ms;         /* mechanical transition; snap rather than glide */
+
+  /* Safe areas, so every screen can reason about chrome without repeating env() */
+  --inset-top: env(safe-area-inset-top, 0px);
+  --inset-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/**
+ * ALERT mode. The accent becomes red and NOTHING else changes — surfaces, text
+ * and the semantic set stay where they are, so "this is live" and "this is
+ * wrong" remain different signals.
+ */
+:root[data-accent="alert"] {
+  --accent:     #FF5A47;
+  --accent-dim: #7A2E24;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.45;
+  /* The app owns its own scrolling; the document never bounces. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/** Labels, headers, nav — this is what makes it read as an instrument panel. */
+.label {
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/** All numerals, IDs, timestamps, tabular data. Numbers must align. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/** The accent glow is the focus ring. */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent), 0 0 8px rgba(var(--rgb-standard), 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
