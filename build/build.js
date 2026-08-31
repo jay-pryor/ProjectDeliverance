@@ -65,7 +65,6 @@ const options = {
   loader: { '.woff': 'file', '.woff2': 'file' },
   assetNames: 'fonts/[name]-[hash]',
   logLevel: 'info',
-  minify: false,
 };
 
 const cssOptions = {
@@ -79,19 +78,10 @@ async function copyShell() {
   await writeFile(path.join(OUT, 'index.html'), html);
 }
 
-async function fixCSSAttributeQuotes() {
-  const cssPath = path.join(OUT, 'app.css');
-  let css = await readFile(cssPath, 'utf8');
-  // Preserve attribute selector quotes for the test regex
-  css = css.replace(/\[data-accent=alert\]/g, '[data-accent="alert"]');
-  await writeFile(cssPath, css);
-}
-
 async function once() {
   await copyShell();
   await esbuild(options);
   await esbuild(cssOptions);
-  await fixCSSAttributeQuotes();
   const over = await checkLineCap();
   console.log(`  built -> www/${over ? `  (${over} file(s) over the line cap)` : ''}`);
 }
@@ -100,12 +90,6 @@ if (watch) {
   await copyShell();
   const js = await context(options);
   const css = await context(cssOptions);
-
-  // Watch for CSS changes and fix attribute quotes after each build
-  css.onRebuild(async (error) => {
-    if (!error) await fixCSSAttributeQuotes();
-  });
-
   await js.watch();
   await css.watch();
   await checkLineCap();

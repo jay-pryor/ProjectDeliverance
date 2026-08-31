@@ -15,8 +15,12 @@ test('the fixed palette is present verbatim', async () => {
 
 test('ALERT mode swaps only the two accent tokens', async () => {
   const css = await readFile(CSS, 'utf8');
-  const block = /\[data-accent="alert"\][^{]*\{([^}]*)\}/.exec(css);
-  assert.ok(block, 'an [data-accent="alert"] block must exist');
+  // Quotes optional: esbuild's CSS printer always strips them from attribute
+  // selectors whose value is a valid identifier, regardless of minify. Both
+  // forms are the same selector, so asserting on the quoted form alone would
+  // be testing incidental formatting rather than meaning.
+  const block = /\[data-accent=["']?alert["']?\][^{]*\{([^}]*)\}/.exec(css);
+  assert.ok(block, 'an [data-accent=alert] block must exist');
   const declared = block[1].match(/--[a-z-]+(?=\s*:)/g) || [];
   assert.deepEqual(
     declared.sort(),
