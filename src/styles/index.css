@@ -1,0 +1,3 @@
+/* The one stylesheet entry point. esbuild follows these imports and emits a
+   single app.css; the split exists for editing, not for delivery. */
+@import "./tokens.css";
