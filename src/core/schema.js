@@ -15,6 +15,7 @@
 import { makeId } from './ids.js';
 import { repairProjects, repairTasks } from './tasks.js';
 import { repairRoutines } from './routines.js';
+import { repairEvents } from './events.js';
 
 export const DOC_VERSION = 1;
 
@@ -102,7 +103,7 @@ export function migrate(doc, { now = Date.now } = {}) {
   out.projects = repairProjects(out.projects);
   out.tasks = repairTasks(out.tasks);
   out.routines = repairRoutines(out.routines);
-  out.events = Array.isArray(out.events) ? out.events : [];
+  out.events = repairEvents(out.events);
   out.dismissals = Array.isArray(out.dismissals) ? out.dismissals.map(String) : [];
 
   return out;
