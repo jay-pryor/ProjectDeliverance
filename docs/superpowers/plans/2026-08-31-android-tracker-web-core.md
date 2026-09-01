@@ -96,7 +96,7 @@ test/                       mirrors src/, node --test
     "watch": "node build/build.js --watch",
     "dev": "node build/build.js --watch --serve",
     "pretest": "node build/build.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --import ./test/tz.js --test \"test/**/*.test.js\""
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
@@ -121,6 +121,26 @@ Append to the existing `.gitignore` (which already contains `/reference/`):
 # Build output
 /www/
 node_modules/
+```
+
+- [ ] **Step 3b: Pin the suite's timezone**
+
+Create `test/tz.js`:
+
+```js
+/**
+ * Pin the timezone for the whole test suite.
+ *
+ * Almost every date rule in this app is about LOCAL calendar components versus
+ * UTC — and in a UTC container those tests are vacuous, because the two agree.
+ * A `toISOString()` regression, or a DST-naive `midnight + minutes` calculation,
+ * passes silently. Running in a zone that is offset from UTC and observes DST
+ * makes both classes of bug actually fail a test.
+ *
+ * Loaded via `--import` rather than a `TZ=` prefix so it works on Windows too,
+ * where `npm test` runs through cmd and inline env assignment does not.
+ */
+process.env.TZ = 'Europe/London';
 ```
 
 - [ ] **Step 4: Write the failing build test**
@@ -709,10 +729,22 @@ import {
   minutesToLabel, labelToMinutes, dayName, formatDayLabel, isWeekend,
 } from '../../src/core/time.js';
 
+test('the suite runs in a timezone where local and UTC differ', () => {
+  // Guard, not a formality. Every test below is about local-vs-UTC, and in a
+  // UTC container they all pass against a toISOString() implementation because
+  // the two answers coincide. If this assertion ever fails, the date tests
+  // beneath it have quietly stopped testing anything.
+  assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/London');
+  assert.notEqual(new Date(2026, 7, 31).getTimezoneOffset(), 0, 'August is BST, not UTC');
+});
+
 test('dateKey uses local components, not UTC', () => {
-  // 23:30 local on the 31st. toISOString() would report the 1st for anyone
-  // east of Greenwich — this is the bug the local construction prevents.
-  const d = new Date(2026, 7, 31, 23, 30);
+  // 00:30 local on the 31st, during BST (UTC+1). In UTC that instant is 23:30
+  // on the 30th, so a toISOString()-based implementation returns the WRONG day
+  // here — which is the whole point of building the key from local components.
+  // The time matters: a late-evening fixture would agree with UTC in this zone
+  // and prove nothing.
+  const d = new Date(2026, 7, 31, 0, 30);
   assert.equal(dateKey(d), '2026-08-31');
 });
 
