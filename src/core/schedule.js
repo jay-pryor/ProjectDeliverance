@@ -112,10 +112,16 @@ function eventNotificationsFor(doc, key, defaultLead) {
  * you last opened the app", which is the best a local notification can do
  * without a server.
  */
-function digestBody(doc, key, today) {
+function digestBody(doc, key) {
   const tasks = liveTasks(doc);
-  const overdue = tasks.filter((t) => dueState(t, today) === 'overdue').length;
-  const due = tasks.filter((t) => t.status !== 'done' && t.dueKey === key).length;
+  // BOTH counts are relative to the day this digest FIRES on, never to the day
+  // it was scheduled. Computing overdue against schedule time instead makes a
+  // task vanish from the forecast the moment its own due day passes: it is no
+  // longer "due today" for any later day, and it was not yet overdue when the
+  // window was built, so it is counted nowhere and the digest says "Nothing
+  // due" while the task sits there overdue.
+  const overdue = tasks.filter((t) => dueState(t, key) === 'overdue').length;
+  const due = tasks.filter((t) => dueState(t, key) === 'today').length;
   const routines = liveRoutines(doc).filter((r) => occursOn(r.rule, key)).length;
   const events = liveEvents(doc).filter((e) => occursOn(e.rule, key)).length;
 
@@ -142,7 +148,6 @@ function digestBody(doc, key, today) {
  */
 export function scheduleFor(doc, nowMs, { windowDays = WINDOW_DAYS } = {}) {
   if (!doc) return [];
-  const today = todayKey(nowMs);
   const dismissed = new Set(doc.dismissals || []);
   const settings = doc.settings || {};
   const defaultLead = Number.isFinite(settings.eventLeadMin) ? settings.eventLeadMin : 15;
@@ -158,7 +163,7 @@ export function scheduleFor(doc, nowMs, { windowDays = WINDOW_DAYS } = {}) {
         channel: CHANNELS.DIGEST,
         fireAt: instantAt(key, Number(digest.timeMin) || 0),
         title: 'Today',
-        body: digestBody(doc, key, today),
+        body: digestBody(doc, key),
       });
     }
   }

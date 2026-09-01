@@ -198,6 +198,30 @@ test('overdue tasks are counted in every digest, not only on their due day', () 
   assert.match(out[0].body, /1 overdue/);
 });
 
+test('a task stays in the digest after its due day, as overdue', () => {
+  // The reference frame that matters is the day the digest FIRES on, not the
+  // day the window was built. Counting overdue against schedule time makes a
+  // task disappear from every digest after its own due day — it is not "due
+  // today" for those days, and it was not yet overdue when scheduled, so it
+  // is counted nowhere at all.
+  //
+  // The fixture is deliberately due AFTER today: a task already overdue at
+  // schedule time is overdue in both frames and so proves nothing.
+  const out = scheduleFor(docWith({ tasks: [task({ dueKey: '2026-09-02' })] }), NOW)
+    .filter((n) => n.channel === CHANNELS.DIGEST);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-02').body, /1 task/);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-05').body, /1 overdue/);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-10').body, /1 overdue/);
+});
+
+test('an all-day event is carried by the digest instead of its own alert', () => {
+  const out = scheduleFor(docWith({
+    events: [event({ startMin: null, endMin: null, rule: { kind: 'once', date: '2026-09-01' } })],
+  }), NOW);
+  assert.equal(out.filter((n) => n.channel === CHANNELS.EVENTS).length, 0);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-01').body, /1 event/);
+});
+
 test('a done task is never counted', () => {
   const out = scheduleFor(docWith({
     tasks: [task({ dueKey: '2026-09-01', status: 'done', doneAt: 1 })],
