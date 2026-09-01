@@ -58,6 +58,32 @@ test('archiving a routine cancels its notifications', async () => {
   assert.equal((await backend.list()).length, 0);
 });
 
+test('a nullish rejection neither crashes nor poisons the chain', async () => {
+  // Some native bridges reject with no value. `err.message` on that throws
+  // inside the catch, which rejects the chain head — and a rejected head makes
+  // every later .then(fn) skip fn entirely, silently killing notification
+  // syncing for the rest of the session.
+  const { app, backend } = await mount();
+  // Nothing has changed since boot's own sync, so a bare syncNotifications()
+  // call here would have nothing new to write and would never even reach
+  // backend.schedule. A real change is needed first so there is something to
+  // write, and hence something for the throwing stub to actually intercept.
+  backend.schedule = async () => { throw null; };
+  app.actions.openRoutine(null);
+  app.actions.saveRoutine({ name: 'poison', timeMin: 1250, steps: [],
+                            rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
+  await assert.doesNotReject(() => app.syncNotifications());
+  assert.ok(app.state.notifyError, 'the failure is recorded, not swallowed');
+
+  // The chain must still be usable afterwards.
+  backend.schedule = async () => {};
+  app.actions.openRoutine(null);
+  app.actions.saveRoutine({ name: 'after', timeMin: 1300, steps: [],
+                            rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
+  const after = await app.syncNotifications();
+  assert.notEqual(after, null, 'sync still runs after a nullish failure');
+});
+
 test('a sync failure does not take the app down', async () => {
   const { app, backend } = await mount();
   backend.schedule = async () => { throw new Error('no permission'); };
