@@ -34,6 +34,19 @@ const RENDERERS = {
 };
 
 /**
+ * A copy of the document whose `seq` is safe to allocate a reference from.
+ *
+ * `nextRef` increments `doc.seq` IN PLACE, so every `create*` call has to run
+ * against a copy or it mutates the live document as a side effect of what is
+ * supposed to be a pure `doc → doc` transform. Three actions need this, so the
+ * reason is stated once here rather than three times in comments that can drift
+ * apart.
+ */
+function withFreshSeq(doc) {
+  return { ...doc, seq: { ...doc.seq } };
+}
+
+/**
  * Apply a patch to a task. A status change is routed through `setStatus`
  * rather than spread directly, so `doneAt` is stamped when a task becomes
  * done and cleared when it moves off done — a plain spread onto the record
@@ -108,9 +121,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
             tasks: doc.tasks.map((t) => (t.id === editing.id ? withPatch(t, patch, now) : t)),
           };
         }
-        // createTask mutates doc.seq to allocate a ref, so it runs against a
-        // copy — update() must stay a pure doc → doc transform.
-        const next = { ...doc, seq: { ...doc.seq } };
+        const next = withFreshSeq(doc);
         const created = withPatch(createTask(next, {}, { now }), patch, now);
         return { ...next, tasks: [...next.tasks, created] };
       });
@@ -137,9 +148,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
             events: doc.events.map((e) => (e.id === editing.id ? { ...e, ...patch } : e)),
           };
         }
-        // createEvent mutates doc.seq to allocate a ref, so it runs against a
-        // copy — update() must stay a pure doc → doc transform.
-        const next = { ...doc, seq: { ...doc.seq } };
+        const next = withFreshSeq(doc);
         const created = { ...createEvent(next, {}, { now }), ...patch };
         return { ...next, events: [...next.events, created] };
       });
@@ -164,7 +173,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
         if (editing && editing.id) {
           return { ...doc, routines: doc.routines.map((r) => (r.id === editing.id ? { ...r, ...patch } : r)) };
         }
-        const next = { ...doc, seq: { ...doc.seq } };
+        const next = withFreshSeq(doc);
         return { ...next, routines: [...next.routines, createRoutine(next, patch, { now })] };
       });
       state.editing = null;
