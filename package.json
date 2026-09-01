@@ -9,7 +9,8 @@
     "watch": "node build/build.js --watch",
     "dev": "node build/build.js --watch --serve",
     "pretest": "node build/build.js",
-    "test": "node --import ./test/tz.js --test \"test/**/*.test.js\""
+    "test": "node --import ./test/tz.js --test \"test/**/*.test.js\"",
+    "android": "npm run build && cap sync android"
   },
   "devDependencies": {
     "@capacitor/android": "^8.5.1",
