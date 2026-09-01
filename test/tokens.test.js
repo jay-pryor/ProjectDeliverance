@@ -50,3 +50,44 @@ test('no banned typeface is used in a font stack', async () => {
     assert.ok(!hit, `${banned} is banned by ui-design.md — found in: ${hit}`);
   }
 });
+
+/**
+ * Every rule in `css` whose selector list contains `selector` as a whole
+ * compound — `.tab` matches `.tab` but not `.tab-bar` and not
+ * `.tab[aria-current=page]`, which is a state, not the base control.
+ */
+function rulesFor(css, selector) {
+  const out = [];
+  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let m;
+  while ((m = re.exec(css)) !== null) {
+    const parts = m[1].split(',').map((p) => p.trim());
+    if (parts.includes(selector)) out.push(m[2]);
+  }
+  return out;
+}
+
+test('every tappable control declares the 44px touch-target floor', async () => {
+  // Asserted against the stylesheet, not the DOM. jsdom does not lay out, so a
+  // rendered element reports no height at all and a DOM test can only restate
+  // the class it selected by — which is what the test this replaces did, and
+  // why deleting `min-height: var(--tap)` left the suite green. --tap is 44px,
+  // pinned by the palette tests above.
+  const css = await readFile(CSS, 'utf8');
+  // Either form is a floor: .task-check is a fixed 44x44 square rather than a
+  // row that grows, so it sets `height` where the others set `min-height`.
+  const floor = /(?:min-)?height:\s*var\(--tap\)/;
+  for (const selector of ['.tab', '.task-check', '.chip', '.seg-btn', '.btn']) {
+    const bodies = rulesFor(css, selector);
+    assert.ok(bodies.length, `${selector} must exist in the stylesheet`);
+    assert.ok(bodies.some((body) => floor.test(body)),
+      `${selector} must declare a var(--tap) height floor — 44px is the spec's `
+      + 'headline rule and this is the only test that checks it');
+  }
+});
+
+test('--tap really is 44px', async () => {
+  // The rule above is worth nothing if the token drifts.
+  const css = await readFile(CSS, 'utf8');
+  assert.match(css, /--tap:\s*44px/);
+});

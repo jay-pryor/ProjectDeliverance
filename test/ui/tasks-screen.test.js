@@ -68,7 +68,10 @@ test('completing a task removes it from the outstanding list and stamps doneAt',
   assert.equal(root.querySelector('[data-task="tsk_1"]'), null);
 });
 
-test('the completion control is a real button of tappable size', async () => {
+test('the completion control is a real button, labelled for screen readers', async () => {
+  // Renamed: it never checked size, and could not — jsdom does not lay out.
+  // The 44px floor for .task-check is asserted against the stylesheet in
+  // test/tokens.test.js.
   const { root } = await mount();
   const check = root.querySelector('.task-check');
   assert.equal(check.tagName, 'BUTTON');

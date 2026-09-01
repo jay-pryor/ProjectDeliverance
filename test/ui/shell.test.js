@@ -48,14 +48,17 @@ test('tapping a tab changes screen and moves the current marker', async () => {
   assert.equal(current[0].dataset.screen, 'calendar');
 });
 
-test('every tab meets the 44px touch-target floor', async () => {
+test('every tab is a real button', async () => {
+  // Named for what it can actually check. The 44px floor is a stylesheet fact
+  // and jsdom does not lay out, so it is asserted against www/app.css in
+  // test/tokens.test.js; claiming it here only ever restated the selector.
   const { root, app } = mount();
   await app.boot();
-  // jsdom does not lay out, so assert the contract the stylesheet must honour
-  // rather than a measured height: the class is the promise.
-  for (const tab of root.querySelectorAll('.tab')) {
-    assert.ok(tab.classList.contains('tab'));
+  const tabs = [...root.querySelectorAll('.tab')];
+  assert.equal(tabs.length, SCREENS.length);
+  for (const tab of tabs) {
     assert.equal(tab.tagName, 'BUTTON', 'a tab must be a real button, for focus and a11y');
+    assert.equal(tab.getAttribute('type'), 'button', 'never a submit button');
   }
 });
 
@@ -113,4 +116,43 @@ test('an unparseable state file still says exactly that', async () => {
   const { root, app } = mount({ 'state.json': '{ not json' });
   await app.boot();
   assert.match(root.textContent, /not valid JSON/i);
+});
+
+
+test('a tab lights only while it is holding something', async () => {
+  // The whole `attention` path — signals.js through to the mark on the tab —
+  // had no test at all, so a badge that never lit, or one permanently lit,
+  // would have looked exactly like this suite passing.
+  const seed = { 'state.json': JSON.stringify({
+    tasks: [{ id: 'tsk_1', ref: 'T-1', name: 'Late thing', project: null, status: 'todo',
+              priority: 'normal', dueKey: '2026-08-20', detail: '', doneAt: null,
+              archived: false }],
+    projects: [], routines: [], events: [], dismissals: [],
+    settings: { accentMode: 'standard', digest: { enabled: true, timeMin: 450 },
+                eventLeadMin: 15 },
+  }) };
+  const { root, app } = mount(seed);
+  await app.boot();
+  const lit = (name) => root.querySelector(`.tab[data-screen="${name}"] .mark`)
+    .classList.contains('live');
+
+  assert.equal(lit('today'), true, 'an overdue task lights TODAY');
+  assert.equal(lit('calendar'), false, 'nothing is on the calendar yet');
+
+  app.actions.update((doc) => ({ ...doc, events: [
+    { id: 'evt_1', ref: 'C-1', name: 'Dentist', detail: '',
+      rule: { kind: 'once', date: '2026-08-31' },
+      startMin: 540, endMin: 600, spanDays: 0, leadMin: null, archived: false },
+  ] }));
+  assert.equal(lit('calendar'), true, 'an event today lights CALENDAR');
+
+  app.actions.update((doc) => ({
+    ...doc,
+    tasks: doc.tasks.map((t) => ({ ...t, status: 'done' })),
+  }));
+  assert.equal(lit('today'), false, 'and it goes out again when nothing is due');
+
+  // Tabs with no count never light, whatever the document holds.
+  assert.equal(lit('tasks'), false);
+  assert.equal(lit('settings'), false);
 });

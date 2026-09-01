@@ -63,7 +63,7 @@ test('deleting a routine cancels exactly its notifications', async () => {
   assert.equal(result.kept, 14);
 });
 
-test('changing a time cancels the old instants and creates the new ones', async () => {
+test('changing a time rewrites the same ids rather than cancelling and re-creating', async () => {
   const backend = createLogBackend();
   const notifier = createNotifier({ backend });
   await notifier.sync(docWith({ routines: [routine()] }), NOW);
@@ -129,4 +129,22 @@ test('an adoption that failed is retried, not spent', async () => {
   backend.list = realList;
   const result = await fresh.sync(docWith({ routines: [] }), NOW);
   assert.equal(result.cancelled.length, 14, 'the retry still adopts');
+});
+
+
+test('changing only the body reschedules — a stale step list is a wrong alarm', async () => {
+  // The third arm of the diff. Time and title unchanged, only the text moves:
+  // without the body comparison every one of these would be counted as `kept`
+  // and the shade would keep showing the steps the routine used to have.
+  const backend = createLogBackend();
+  const notifier = createNotifier({ backend });
+  await notifier.sync(docWith({ routines: [routine()] }), NOW);
+
+  const edited = docWith({ routines: [routine({ steps: ['Blue one', 'White one'] })] });
+  const result = await notifier.sync(edited, NOW);
+  assert.equal(result.rescheduled.length, 14);
+  assert.equal(result.kept, 0, 'not one of them may be left alone');
+  assert.equal(result.created.length, 0);
+  assert.equal(result.cancelled.length, 0);
+  assert.match(backend.scheduled.at(-1).body, /2 steps — Blue one/);
 });

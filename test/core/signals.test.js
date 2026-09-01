@@ -28,7 +28,14 @@ test('attention counts what each tab is holding', () => {
     ...createEmptyDoc({ now: clock }),
     tasks: [{ id: 't1', name: 'x', status: 'todo', priority: 'normal', project: null,
               detail: '', doneAt: null, archived: false, dueKey: '2026-08-20' }],
+    // An event is the point of the calendar count. Asserting `calendar === 0`
+    // against a document with no events at all is vacuous: it would read 0 for
+    // any implementation, including none.
+    events: [{ id: 'evt_1', ref: 'C-1', name: 'Dentist', detail: '',
+               rule: { kind: 'once', date: '2026-08-31' },
+               startMin: 540, endMin: 600, spanDays: 0, leadMin: null, archived: false }],
   };
   assert.equal(attention(doc, clock()).today, 1);
-  assert.equal(attention(doc, clock()).calendar, 0);
+  assert.equal(attention(doc, clock()).calendar, 1);
+  assert.equal(attention({ ...doc, events: [] }, clock()).calendar, 0, 'and back to zero');
 });
