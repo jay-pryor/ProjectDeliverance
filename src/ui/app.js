@@ -20,6 +20,7 @@ import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createNotifyBackend } from '../platform/notify-backend.js';
 import { createNotifySync } from './notify-sync.js';
+import { createSettingsActions } from './settings-actions.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
 import { createEvent } from '../core/events.js';
@@ -237,31 +238,14 @@ export function createApp({ root, driver, now = Date.now, backend, ready } = {})
         : { ...doc, dismissals: [...doc.dismissals, key] }));
     },
 
-    /** @param {string} path e.g. 'digest.timeMin' or 'accentMode' */
-    setSetting(path, value) {
-      actions.update((doc) => {
-        const [head, tail] = path.split('.');
-        const settings = tail
-          ? { ...doc.settings, [head]: { ...doc.settings[head], [tail]: value } }
-          : { ...doc.settings, [head]: value };
-        return { ...doc, settings };
-      });
-    },
-
-    exportDoc() { return JSON.stringify(state.doc, null, 2); },
-
-    /** @returns {boolean} whether the text was accepted */
-    importDoc(text) {
-      let raw;
-      try { raw = JSON.parse(text); } catch { return false; }
-      const check = validateDoc(raw);
-      if (!check.ok) return false;
-      state.doc = migrate(raw, { now });
-      writer.schedule(state.doc);
-      app.render();
-      app.syncNotifications();
-      return true;
-    },
+    // setSetting, exportDoc and importDoc. Handed `update` rather than the
+    // state: they are lazy closures, so referring to `actions` while it is
+    // still being built is safe — nothing calls them until the app is running.
+    ...createSettingsActions({
+      update: (fn) => actions.update(fn),
+      getDoc: () => state.doc,
+      now,
+    }),
   };
 
   const app = {
