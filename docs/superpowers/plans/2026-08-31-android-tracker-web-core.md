@@ -3639,7 +3639,16 @@ In `src/ui/app.js`, after `state.doc = migrate(raw, { now });` in `boot()`:
 ```js
         // Pruned once per launch rather than on a timer: the list only grows
         // when something is dismissed, and nothing else reads it in between.
-        state.doc = { ...state.doc, dismissals: pruneDismissals(state.doc, now()) };
+        const pruned = pruneDismissals(state.doc, now());
+        if (pruned.length !== (state.doc.dismissals || []).length) {
+          state.doc = { ...state.doc, dismissals: pruned };
+          // Persist it. Left in memory, the prune reaches disk only on the next
+          // unrelated edit, so a launch where the user changes nothing leaves
+          // the stored list unpruned — and bounding that list is the whole
+          // reason pruning exists. Guarded, so a launch with nothing to prune
+          // does not spend a write.
+          writer.schedule(state.doc);
+        }
 ```
 
 with `import { pruneDismissals } from '../core/signals.js';` at the top.
@@ -3761,6 +3770,16 @@ test('selecting a day lists its events with their times', async () => {
   assert.match(detail.textContent, /09:00–10:00/);
 });
 
+test('paging carries the selection into the new month', async () => {
+  // Otherwise the detail panel describes a day the grid is not showing.
+  const { root, app } = await mount();
+  root.querySelector('[data-day="2026-08-12"]').click();
+  root.querySelector('.cal-next').click();
+  assert.equal(app.state.selectedDay, '2026-09-01');
+  assert.equal(root.querySelector('.cal-day[aria-pressed="true"]').dataset.day, '2026-09-01');
+  assert.match(root.querySelector('.cal-day-detail').textContent, /2026-09-01/);
+});
+
 test('paging months moves the grid and survives a year boundary', async () => {
   const { root, app } = await mount();
   root.querySelector('.cal-next').click();
@@ -3795,6 +3814,12 @@ with `import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js'
       // cannot land on a date that does not (which +30 days would).
       d.setMonth(d.getMonth() + n);
       state.month = `${dateKey(d).slice(0, 7)}-01`;
+      // Move the selection with the grid. Left behind, it makes the day panel
+      // describe a date in a month the grid is no longer showing, with no cell
+      // highlighted to explain why — the panel reads as stale rather than as
+      // "elsewhere". The 1st exists in every month, so this can never be an
+      // invalid key.
+      state.selectedDay = state.month;
       app.render();
     },
     selectDay(key) { state.selectedDay = key; app.render(); },
