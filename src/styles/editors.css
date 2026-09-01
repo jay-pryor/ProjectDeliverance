@@ -1,6 +1,11 @@
 /**
- * The editor sheet. Covers the screen but not the tab bar, so the way out is
- * always visible.
+ * The editor sheet.
+ *
+ * `inset: <top> 0 0` means bottom: 0 — it deliberately covers the tab bar as
+ * well as the screen. A half-finished edit should not be one stray thumb-tap
+ * from being navigated away from, so while the sheet is open its own Cancel and
+ * Save are the only ways out. The generous bottom padding keeps those two clear
+ * of the gesture area rather than reserving room for tabs that are not drawn.
  */
 
 .editor {

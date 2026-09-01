@@ -44,7 +44,10 @@
 }
 /* DOING gets a dim fill — distinct from an empty TODO mark and a full DONE
    one, so status is legible in the list without opening the editor. */
-.task-row[data-status="doing"] .mark { background: var(--accent-dim); }
+.task-row[data-status="doing"] .task-check .mark {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
 
 .task-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .is-done .task-name { color: var(--text-dim); text-decoration: line-through; }
