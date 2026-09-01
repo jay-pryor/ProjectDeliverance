@@ -1,0 +1,189 @@
+/**
+ * What notifications should exist — the single chokepoint.
+ *
+ * One pure function answers "given this document and this moment, what should
+ * Android be holding?". The platform layer diffs that answer against what is
+ * actually pending and cancels or creates the difference. Nothing else in the
+ * app talks to the notification system, so routines, events and the digest
+ * cannot end up disagreeing about what is scheduled.
+ *
+ * Being pure is the point: the whole notification design is testable in Node
+ * with no phone, no emulator and no Capacitor.
+ *
+ * NOTE the difference from the panel functions. `activeRoutines()` and
+ * `eventNotifications()` answer "what should be on screen now" — today, or today
+ * and tomorrow. AlarmManager needs "at which future instants should something
+ * fire", which is a different question, so this is built directly on
+ * `occursOn()` rather than wrapping them.
+ */
+
+import { occursOn } from './recurrence.js';
+import { liveRoutines, routineKey } from './routines.js';
+import { liveEvents, eventsOnDay } from './events.js';
+import { liveTasks, dueState } from './tasks.js';
+import { todayKey, addDays, parseDateKey, minutesToLabel } from './time.js';
+
+/**
+ * How far ahead to schedule.
+ *
+ * A `daily` rule is an infinite series and Android caps pending alarms, so the
+ * expansion has to stop somewhere. Fourteen days is far past any plausible gap
+ * between app opens.
+ *
+ * The window is recomputed when the app opens and whenever it returns to the
+ * foreground (`boot()` and the `visibilitychange` handler in ui/app.js) — and
+ * at NO other time. There is no daily timer: a WebView that is not running
+ * cannot hold one. So the self-healing is only as good as the user's habit of
+ * opening the app, and a device left untouched for a fortnight runs out of
+ * scheduled alarms on day 15 and goes silent until the app is opened again.
+ * Closing that gap needs a boot receiver and a periodic native job, which is
+ * Plan 2's work; it cannot be done from here.
+ */
+export const WINDOW_DAYS = 14;
+
+/**
+ * Separate Android channels, so the digest can be muted in the system settings
+ * without also losing routine alerts. Free to do now, annoying to retrofit.
+ */
+export const CHANNELS = { ROUTINES: 'routines', EVENTS: 'events', DIGEST: 'digest' };
+
+/**
+ * Local epoch millis for `minutes` past midnight on `dateKey`.
+ *
+ * `setHours` rather than `midnight + minutes * 60000`: on a DST transition day
+ * the arithmetic version is an hour out, which would send the morning routine
+ * at 06:00 twice a year.
+ */
+export function instantAt(dateKey, minutes) {
+  const d = parseDateKey(dateKey);
+  if (!d) return NaN;
+  d.setHours(0, Math.round(minutes), 0, 0);
+  return d.getTime();
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** The days the window covers, today first. */
+function windowKeys(nowMs, windowDays) {
+  const start = todayKey(nowMs);
+  return Array.from({ length: windowDays }, (_, i) => addDays(start, i));
+}
+
+function routineNotifications(doc, key, dismissed) {
+  const out = [];
+  for (const routine of liveRoutines(doc)) {
+    if (!occursOn(routine.rule, key)) continue;
+    if (dismissed.has(routineKey(routine, key))) continue;
+    out.push({
+      id: `rtn:${routine.id}:${key}`,
+      channel: CHANNELS.ROUTINES,
+      fireAt: instantAt(key, Number(routine.timeMin) || 0),
+      title: routine.name,
+      body: routine.steps.length
+        ? `${plural(routine.steps.length, 'step')} — ${routine.steps[0]}`
+        : 'Due now',
+    });
+  }
+  return out;
+}
+
+function eventNotificationsFor(doc, key, defaultLead) {
+  const out = [];
+  for (const event of liveEvents(doc)) {
+    // Start days only. A multi-day visit that renewed its own alert every
+    // morning would train you to ignore the channel.
+    if (!occursOn(event.rule, key)) continue;
+    // An all-day event has no time to fire at, and inventing one would be a
+    // guess. The daily digest carries it instead.
+    if (!Number.isFinite(event.startMin)) continue;
+
+    const lead = Number.isFinite(event.leadMin) ? event.leadMin : defaultLead;
+    out.push({
+      id: `evt:${event.id}:${key}`,
+      channel: CHANNELS.EVENTS,
+      fireAt: instantAt(key, event.startMin - lead),
+      title: event.name,
+      body: lead > 0
+        ? `Starts at ${minutesToLabel(event.startMin)}`
+        : `Starting now — ${minutesToLabel(event.startMin)}`,
+    });
+  }
+  return out;
+}
+
+/**
+ * What that day is *known* to hold, at the time of scheduling.
+ *
+ * Necessarily a forecast: a local notification carries its text from the moment
+ * it is scheduled, and something added tomorrow cannot be in a body written
+ * today. Recomputing the window on every app open bounds the staleness to "since
+ * you last opened the app", which is the best a local notification can do
+ * without a server.
+ */
+function digestBody(doc, key) {
+  const tasks = liveTasks(doc);
+  // BOTH counts are relative to the day this digest FIRES on, never to the day
+  // it was scheduled. Computing overdue against schedule time instead makes a
+  // task vanish from the forecast the moment its own due day passes: it is no
+  // longer "due today" for any later day, and it was not yet overdue when the
+  // window was built, so it is counted nowhere and the digest says "Nothing
+  // due" while the task sits there overdue.
+  const overdue = tasks.filter((t) => dueState(t, key) === 'overdue').length;
+  const due = tasks.filter((t) => dueState(t, key) === 'today').length;
+  const routines = liveRoutines(doc).filter((r) => occursOn(r.rule, key)).length;
+  // eventsOnDay, not occursOn: the same function digestFor uses, so the
+  // notification and the TODAY screen it points at count the same things. A
+  // multi-day event covers every day of its span; counting start days only made
+  // day two of a three-day visit report "Nothing due".
+  const events = eventsOnDay(doc, key).length;
+
+  const parts = [];
+  if (due) parts.push(plural(due, 'task'));
+  if (routines) parts.push(plural(routines, 'routine'));
+  if (events) parts.push(plural(events, 'event'));
+  if (overdue) parts.push(`${overdue} overdue`);
+
+  return parts.length ? parts.join(', ') : 'Nothing due';
+}
+
+/**
+ * Every notification that should be pending, soonest first.
+ *
+ * Ids are stable for the same occurrence across calls — that is what lets the
+ * platform layer diff rather than cancel-and-recreate everything, which would
+ * make a notification briefly disappear from the shade on every app open.
+ *
+ * @param {object} doc
+ * @param {number} nowMs
+ * @param {{windowDays?: number}} [opts]
+ * @returns {Array<{id: string, channel: string, fireAt: number, title: string, body: string}>}
+ */
+export function scheduleFor(doc, nowMs, { windowDays = WINDOW_DAYS } = {}) {
+  if (!doc) return [];
+  const dismissed = new Set(doc.dismissals || []);
+  const settings = doc.settings || {};
+  const defaultLead = Number.isFinite(settings.eventLeadMin) ? settings.eventLeadMin : 15;
+  const digest = settings.digest || {};
+
+  const out = [];
+  for (const key of windowKeys(nowMs, windowDays)) {
+    out.push(...routineNotifications(doc, key, dismissed));
+    out.push(...eventNotificationsFor(doc, key, defaultLead));
+    if (digest.enabled) {
+      out.push({
+        id: `dig:${key}`,
+        channel: CHANNELS.DIGEST,
+        fireAt: instantAt(key, Number(digest.timeMin) || 0),
+        title: 'Today',
+        body: digestBody(doc, key),
+      });
+    }
+  }
+
+  // Anything already past is dropped rather than fired late. A notification for
+  // 07:00 delivered at 09:00 is worse than none: it reports a moment that has
+  // gone, and teaches you the times cannot be trusted.
+  return out
+    .filter((n) => Number.isFinite(n.fireAt) && n.fireAt > nowMs)
+    .sort((a, b) => a.fireAt - b.fireAt);
+}

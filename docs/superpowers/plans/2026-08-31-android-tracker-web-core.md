@@ -96,7 +96,7 @@ test/                       mirrors src/, node --test
     "watch": "node build/build.js --watch",
     "dev": "node build/build.js --watch --serve",
     "pretest": "node build/build.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --import ./test/tz.js --test \"test/**/*.test.js\""
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
@@ -121,6 +121,26 @@ Append to the existing `.gitignore` (which already contains `/reference/`):
 # Build output
 /www/
 node_modules/
+```
+
+- [ ] **Step 3b: Pin the suite's timezone**
+
+Create `test/tz.js`:
+
+```js
+/**
+ * Pin the timezone for the whole test suite.
+ *
+ * Almost every date rule in this app is about LOCAL calendar components versus
+ * UTC — and in a UTC container those tests are vacuous, because the two agree.
+ * A `toISOString()` regression, or a DST-naive `midnight + minutes` calculation,
+ * passes silently. Running in a zone that is offset from UTC and observes DST
+ * makes both classes of bug actually fail a test.
+ *
+ * Loaded via `--import` rather than a `TZ=` prefix so it works on Windows too,
+ * where `npm test` runs through cmd and inline env assignment does not.
+ */
+process.env.TZ = 'Europe/London';
 ```
 
 - [ ] **Step 4: Write the failing build test**
@@ -366,7 +386,11 @@ test('the fixed palette is present verbatim', async () => {
 
 test('ALERT mode swaps only the two accent tokens', async () => {
   const css = await readFile(CSS, 'utf8');
-  const block = /\[data-accent="alert"\][^{]*\{([^}]*)\}/.exec(css);
+  // Quotes optional: esbuild's CSS printer always strips them from attribute
+  // selectors whose value is a valid identifier, regardless of minify. Both
+  // forms are the same selector, so asserting on the quoted form alone would
+  // be testing incidental formatting rather than meaning.
+  const block = /\[data-accent=["']?alert["']?\][^{]*\{([^}]*)\}/.exec(css);
   assert.ok(block, 'an [data-accent="alert"] block must exist');
   const declared = block[1].match(/--[a-z-]+(?=\s*:)/g) || [];
   assert.deepEqual(
@@ -385,10 +409,16 @@ test('fonts are self-hosted, never fetched from Google', async () => {
   assert.match(css, /IBM Plex/);
 });
 
-test('no banned typeface appears anywhere', async () => {
+test('no banned typeface is used in a font stack', async () => {
   const css = await readFile(CSS, 'utf8');
+  // Scoped to font-family declarations on purpose. A bare substring search
+  // false-positives on any capitalised word containing one of these — "Inter"
+  // inside "Internet" in a vendor comment would fail a correct stylesheet.
+  const stacks = css.match(/font-family:[^;}]*/g) || [];
   for (const banned of ['Inter', 'Roboto', 'Open Sans', 'Lato']) {
-    assert.ok(!css.includes(banned), `${banned} is banned by ui-design.md`);
+    const re = new RegExp(`\\b${banned}\\b`);
+    const hit = stacks.find((stack) => re.test(stack));
+    assert.ok(!hit, `${banned} is banned by ui-design.md — found in: ${hit}`);
   }
 });
 ```
@@ -699,10 +729,22 @@ import {
   minutesToLabel, labelToMinutes, dayName, formatDayLabel, isWeekend,
 } from '../../src/core/time.js';
 
+test('the suite runs in a timezone where local and UTC differ', () => {
+  // Guard, not a formality. Every test below is about local-vs-UTC, and in a
+  // UTC container they all pass against a toISOString() implementation because
+  // the two answers coincide. If this assertion ever fails, the date tests
+  // beneath it have quietly stopped testing anything.
+  assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/London');
+  assert.notEqual(new Date(2026, 7, 31).getTimezoneOffset(), 0, 'August is BST, not UTC');
+});
+
 test('dateKey uses local components, not UTC', () => {
-  // 23:30 local on the 31st. toISOString() would report the 1st for anyone
-  // east of Greenwich — this is the bug the local construction prevents.
-  const d = new Date(2026, 7, 31, 23, 30);
+  // 00:30 local on the 31st, during BST (UTC+1). In UTC that instant is 23:30
+  // on the 30th, so a toISOString()-based implementation returns the WRONG day
+  // here — which is the whole point of building the key from local components.
+  // The time matters: a late-evening fixture would agree with UTC in this zone
+  // and prove nothing.
+  const d = new Date(2026, 7, 31, 0, 30);
   assert.equal(dateKey(d), '2026-08-31');
 });
 
@@ -1198,7 +1240,20 @@ test('flush resolves only once the write has actually landed', async () => {
   // This is the page-unload path. A flush() that resolved while a write was
   // still in flight would lose the last edit — a real bug the reference app's
   // suite caught, and the reason this test exists.
-  const { store } = makeStore();
+  //
+  // The injected latency is load-bearing, not decoration. Against the bare
+  // memory driver — whose writes settle in the same microtask window as the
+  // read that follows — a fire-and-forget flush() that never awaits the drain
+  // passes this test just as happily as a correct one. Only a driver that
+  // actually takes time can tell the two apart.
+  const driver = createMemoryDriver();
+  const realPut = driver.putText.bind(driver);
+  driver.putText = async (name, text) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return realPut(name, text);
+  };
+  const store = createStore({ driver });
+
   await store.open();
   const writer = createDebouncedWriter(store, { idle: 5, ceiling: 50 });
   writer.schedule({ final: true });
@@ -1379,6 +1434,23 @@ test('accentMode is reflected onto the document element', async () => {
   assert.equal(dom.window.document.documentElement.dataset.accent, 'alert');
 });
 
+test('aria state attributes serialise as strings, not boolean attributes', async () => {
+  // A boolean HTML attribute writes "", so [aria-pressed="true"] would never
+  // match and every pressed style in the app would silently do nothing.
+  const { dom } = mount();
+  const { el } = await import('../../src/ui/dom.js');
+  global.document = dom.window.document;
+  const on = el('button', { attrs: { 'aria-pressed': true } });
+  const off = el('button', { attrs: { 'aria-pressed': false } });
+  assert.equal(on.getAttribute('aria-pressed'), 'true');
+  assert.equal(off.getAttribute('aria-pressed'), 'false');
+  assert.ok(on.matches('[aria-pressed="true"]'));
+  // Non-aria booleans keep HTML boolean-attribute semantics.
+  const plain = el('input', { attrs: { disabled: true, readonly: false } });
+  assert.equal(plain.getAttribute('disabled'), '');
+  assert.equal(plain.hasAttribute('readonly'), false);
+});
+
 test('a damaged document reaches recovery instead of being silently emptied', async () => {
   const { root, app } = mount({ 'state.json': JSON.stringify({ tasks: 'not a list' }) });
   await app.boot();
@@ -1415,7 +1487,18 @@ export function el(tag, opts = {}, children = []) {
   if (opts.class) node.className = opts.class;
   if (opts.text != null) node.textContent = String(opts.text);
   for (const [k, v] of Object.entries(opts.attrs || {})) {
-    if (v == null || v === false) continue;
+    if (v == null) continue;
+    // ARIA states are string-valued, not boolean HTML attributes. Setting
+    // `aria-pressed` to `true` the boolean-attribute way writes an empty
+    // string, so `[aria-pressed="true"]` never matches and the pressed style
+    // never applies; and `false` must be written out rather than dropped,
+    // because "not pressed" and "not a toggle" are different statements to a
+    // screen reader. Serialise both explicitly.
+    if (k.startsWith('aria-') && typeof v === 'boolean') {
+      node.setAttribute(k, String(v));
+      continue;
+    }
+    if (v === false) continue;
     node.setAttribute(k, v === true ? '' : String(v));
   }
   for (const [k, v] of Object.entries(opts.style || {})) node.style[k] = v;
@@ -1505,6 +1588,33 @@ const RENDERERS = {
   calendar: renderCalendar,
   settings: renderSettings,
 };
+
+/**
+ * A copy of the document whose `seq` is safe to allocate a reference from.
+ *
+ * `nextRef` increments `doc.seq` IN PLACE, so every `create*` call has to run
+ * against a copy or it mutates the live document as a side effect of what is
+ * supposed to be a pure `doc → doc` transform. Three actions need this, so the
+ * reason is stated once here rather than three times in comments that can drift
+ * apart.
+ */
+function withFreshSeq(doc) {
+  return { ...doc, seq: { ...doc.seq } };
+}
+
+/**
+ * Apply an editor patch to a task.
+ *
+ * A status change is routed through `setStatus` rather than spread in, so
+ * `doneAt` can never end up disagreeing with `status` — spreading
+ * `{status: 'done'}` straight onto a record would mark it done with no
+ * completion time, which is exactly what `setStatus` exists to prevent.
+ */
+function withPatch(task, patch, now) {
+  const { status, ...rest } = patch;
+  const merged = { ...task, ...rest };
+  return status && status !== task.status ? setStatus(merged, status, { now }) : merged;
+}
 
 export function createApp({ root, driver, now = Date.now } = {}) {
   const chosen = driver ? { driver } : createStorage();
@@ -1818,8 +1928,15 @@ Expected: FAIL — cannot resolve `src/core/tasks.js`.
  * level costs a rendering path and a drag target on a screen that has neither
  * to spare.
  *
- * Pure: nothing here reads a clock it was not handed, and no function mutates
- * its argument.
+ * Pure, with one documented exception: `createProject` and `createTask` call
+ * `nextRef`, which allocates a short reference by incrementing `doc.seq` IN
+ * PLACE. That is inherited from the harvested `ids.js` and kept deliberately —
+ * making it pure would mean threading a new `seq` back through every caller for
+ * no functional gain. Callers that must stay pure copy `doc.seq` first; see
+ * `actions.update` in the UI layer, which does exactly that.
+ *
+ * Everything else here takes its clock as a parameter and returns new records
+ * rather than mutating the ones it is given.
  */
 
 import { makeId, nextRef } from './ids.js';
@@ -2177,7 +2294,14 @@ function taskRow(ctx, task, today) {
   const done = task.status === 'done';
   return el('div', {
     class: `task-row${done ? ' is-done' : ''}`,
-    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority },
+    attrs: {
+      'data-task': task.id,
+      'data-due': dueState(task, today),
+      'data-priority': task.priority,
+      // Carried so the list can show an in-progress task as in-progress.
+      // Without it, DOING is settable in the editor and invisible everywhere else.
+      'data-status': task.status,
+    },
   }, [
     el('button', {
       class: 'task-check',
@@ -2265,6 +2389,12 @@ export function renderTasks(ctx) {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* In progress: a dim fill, distinct from both empty (todo) and solid (done).
+   A square at three fill levels, not three different shapes or hues. */
+.task-row[data-status="doing"] .task-check .mark {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
 
 .task-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .is-done .task-name { color: var(--text-dim); text-decoration: line-through; }
@@ -2280,7 +2410,9 @@ export function renderTasks(ctx) {
 
 .chips { display: flex; gap: 4px; }
 .chip {
-  min-height: 32px;
+  /* --tap, not 32px: these are real buttons and the 44px floor is not waived
+     for being small controls in a header row. */
+  min-height: var(--tap);
   padding: 4px 10px;
   background: var(--panel);
   border: 1px solid var(--rule);
@@ -2434,6 +2566,65 @@ test('delete archives rather than destroying', async () => {
   assert.equal(root.querySelector('[data-task="tsk_1"]'), null, 'and is out of the list');
 });
 
+test('an in-progress task is visibly in progress in the list', async () => {
+  // DOING must not be settable-but-invisible.
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d, tasks: d.tasks.map((t) => ({ ...t, status: 'doing' })) }));
+  assert.equal(root.querySelector('[data-task="tsk_1"]').dataset.status, 'doing');
+});
+
+test('the editor shows the task\'s current status as pressed', async () => {
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d, tasks: d.tasks.map((t) => ({ ...t, status: 'doing' })) }));
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  const pressed = root.querySelectorAll('.seg-btn[aria-pressed="true"]');
+  assert.equal(pressed.length, 1, 'exactly one status is ever current');
+  assert.equal(pressed[0].dataset.status, 'doing');
+});
+
+test('a new task defaults to todo', async () => {
+  const { root, app } = await mount();
+  root.querySelector('.add-task').click();
+  assert.equal(root.querySelector('.seg-btn[aria-pressed="true"]').dataset.status, 'todo');
+  root.querySelector('[name="name"]').value = 'Fresh';
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks.at(-1).status, 'todo');
+});
+
+test('setting status to doing saves it', async () => {
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="doing"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].status, 'doing');
+  assert.equal(app.state.doc.tasks[0].doneAt, null);
+});
+
+test('setting status to done through the editor stamps doneAt', async () => {
+  // Spreading {status:'done'} straight onto the record would mark it done with
+  // no completion time. saveTask routes status through setStatus for exactly
+  // this reason.
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="done"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].status, 'done');
+  assert.equal(app.state.doc.tasks[0].doneAt, clock());
+});
+
+test('clearing done through the editor clears doneAt', async () => {
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d,
+    tasks: d.tasks.map((t) => ({ ...t, status: 'done', doneAt: 123 })) }));
+  // The default 'open' filter hides done work, so the row must be shown before
+  // it can be tapped — otherwise this queries null and throws.
+  app.actions.setFilter('all');
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="doing"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].doneAt, null);
+});
+
 test('the project select offers every live project plus unfiled', async () => {
   const { root } = await mount();
   root.querySelector('.add-task').click();
@@ -2460,12 +2651,14 @@ Add `editing: null` to `state`. Add to `actions`:
       const editing = state.editing;
       actions.update((doc) => {
         if (editing && editing.id) {
-          return { ...doc, tasks: doc.tasks.map((t) => (t.id === editing.id ? { ...t, ...patch } : t)) };
+          return {
+            ...doc,
+            tasks: doc.tasks.map((t) => (t.id === editing.id ? withPatch(t, patch, now) : t)),
+          };
         }
-        // createTask mutates doc.seq to allocate a ref, so it runs against a
-        // copy — update() must stay a pure doc → doc transform.
-        const next = { ...doc, seq: { ...doc.seq } };
-        return { ...next, tasks: [...next.tasks, createTask(next, patch, { now })] };
+        const next = withFreshSeq(doc);
+        const created = withPatch(createTask(next, {}, { now }), patch, now);
+        return { ...next, tasks: [...next.tasks, created] };
       });
       state.editing = null;
       app.render();
@@ -2509,7 +2702,10 @@ with `import { renderTaskEditor } from './task-editor.js';` at the top.
  */
 
 import { el } from './dom.js';
-import { liveProjects, PRIORITIES, TASK_FIELDS } from '../core/tasks.js';
+import { liveProjects, PRIORITIES, STATUSES, TASK_FIELDS } from '../core/tasks.js';
+
+/** Sentence-case for the three status ids, which are stored lowercase. */
+const STATUS_LABELS = { todo: 'To do', doing: 'Doing', done: 'Done' };
 
 function field(label, control) {
   return el('label', { class: 'field' }, [
@@ -2533,6 +2729,26 @@ export function renderTaskEditor(ctx, task) {
     })),
   ]);
 
+  // A segmented control rather than a select: three options is few enough to
+  // show at once, and status is the field most likely to be changed on the way
+  // past — one tap beats open-pick-close. Squares, not pills, per the palette.
+  let status = task?.status || 'todo';
+  const statusControl = el('div', {
+    class: 'seg', attrs: { role: 'group', 'aria-label': 'Status' },
+  }, STATUSES.map((id) => el('button', {
+    class: 'seg-btn',
+    attrs: { type: 'button', name: 'status', 'data-status': id, 'aria-pressed': status === id },
+    text: STATUS_LABELS[id],
+    on: { click: () => { status = id; paintStatus(); } },
+  })));
+
+  /** Repaint in place: the editor is not re-rendered while it is open. */
+  function paintStatus() {
+    for (const button of statusControl.querySelectorAll('.seg-btn')) {
+      button.setAttribute('aria-pressed', String(button.dataset.status === status));
+    }
+  }
+
   const priority = el('select', { attrs: { name: 'priority' } },
     PRIORITIES.map((p) => el('option', {
       attrs: { value: p, selected: (task?.priority || 'normal') === p }, text: p,
@@ -2551,6 +2767,7 @@ export function renderTaskEditor(ctx, task) {
   function save() {
     ctx.actions.saveTask({
       name: name.value.trim() || TASK_FIELDS.name,
+      status,
       project: project.value || null,
       priority: priority.value,
       dueKey: due.value || null,
@@ -2566,6 +2783,7 @@ export function renderTaskEditor(ctx, task) {
     ]),
     field('Name', name),
     field('Project', project),
+    field('Status', statusControl),
     field('Priority', priority),
     field('Due', due),
     field('Notes', detail),
@@ -2635,8 +2853,13 @@ button.task-name {
 
 ```css
 /**
- * The editor sheet. Covers the screen but not the tab bar, so the way out is
- * always visible.
+ * The editor sheet.
+ *
+ * `inset: <top> 0 0` means bottom: 0 — it deliberately covers the tab bar as
+ * well as the screen. A half-finished edit should not be one stray thumb-tap
+ * from being navigated away from, so while the sheet is open its own Cancel and
+ * Save are the only ways out. The generous bottom padding keeps those two clear
+ * of the gesture area rather than reserving room for tabs that are not drawn.
  */
 
 .editor {
@@ -2671,6 +2894,25 @@ button.task-name {
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-dim); }
 .field input[type="date"] { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .field textarea { min-height: 84px; resize: vertical; }
+
+/* Segmented control. One row of square buttons sharing a hairline, so the set
+   reads as a single control rather than three loose ones. */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.seg-btn {
+  min-height: var(--tap);
+  background: var(--void);
+  border: 0;
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color var(--step) linear, background var(--step) linear;
+}
+.seg-btn[aria-pressed="true"] { color: var(--accent); background: var(--panel-alt); }
 
 .editor-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
 
@@ -2936,7 +3178,14 @@ export function taskRow(ctx, task, today) {
   const done = task.status === 'done';
   return el('div', {
     class: `task-row${done ? ' is-done' : ''}`,
-    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority },
+    attrs: {
+      'data-task': task.id,
+      'data-due': dueState(task, today),
+      'data-priority': task.priority,
+      // Carried so the list can show an in-progress task as in-progress.
+      // Without it, DOING is settable in the editor and invisible everywhere else.
+      'data-status': task.status,
+    },
   }, [
     el('button', {
       class: 'task-check',
@@ -3433,7 +3682,16 @@ In `src/ui/app.js`, after `state.doc = migrate(raw, { now });` in `boot()`:
 ```js
         // Pruned once per launch rather than on a timer: the list only grows
         // when something is dismissed, and nothing else reads it in between.
-        state.doc = { ...state.doc, dismissals: pruneDismissals(state.doc, now()) };
+        const pruned = pruneDismissals(state.doc, now());
+        if (pruned.length !== (state.doc.dismissals || []).length) {
+          state.doc = { ...state.doc, dismissals: pruned };
+          // Persist it. Left in memory, the prune reaches disk only on the next
+          // unrelated edit, so a launch where the user changes nothing leaves
+          // the stored list unpruned — and bounding that list is the whole
+          // reason pruning exists. Guarded, so a launch with nothing to prune
+          // does not spend a write.
+          writer.schedule(state.doc);
+        }
 ```
 
 with `import { pruneDismissals } from '../core/signals.js';` at the top.
@@ -3555,6 +3813,16 @@ test('selecting a day lists its events with their times', async () => {
   assert.match(detail.textContent, /09:00–10:00/);
 });
 
+test('paging carries the selection into the new month', async () => {
+  // Otherwise the detail panel describes a day the grid is not showing.
+  const { root, app } = await mount();
+  root.querySelector('[data-day="2026-08-12"]').click();
+  root.querySelector('.cal-next').click();
+  assert.equal(app.state.selectedDay, '2026-09-01');
+  assert.equal(root.querySelector('.cal-day[aria-pressed="true"]').dataset.day, '2026-09-01');
+  assert.match(root.querySelector('.cal-day-detail').textContent, /2026-09-01/);
+});
+
 test('paging months moves the grid and survives a year boundary', async () => {
   const { root, app } = await mount();
   root.querySelector('.cal-next').click();
@@ -3589,6 +3857,12 @@ with `import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js'
       // cannot land on a date that does not (which +30 days would).
       d.setMonth(d.getMonth() + n);
       state.month = `${dateKey(d).slice(0, 7)}-01`;
+      // Move the selection with the grid. Left behind, it makes the day panel
+      // describe a date in a month the grid is no longer showing, with no cell
+      // highlighted to explain why — the panel reads as stale rather than as
+      // "elsewhere". The 1st exists in every month, so this can never be an
+      // invalid key.
+      state.selectedDay = state.month;
       app.render();
     },
     selectDay(key) { state.selectedDay = key; app.render(); },
@@ -3875,11 +4149,16 @@ test('the rule is described in words as it is edited', () => {
 
 import { el } from './dom.js';
 import { RULE_KINDS, describeRule } from '../core/recurrence.js';
-import { DAY_NAMES, todayKey } from '../core/time.js';
+import { DAY_NAMES } from '../core/time.js';
 
-/** A usable rule of each kind, so switching kind never yields a broken one. */
-function seedRule(kind, previous) {
-  const today = todayKey();
+/**
+ * A usable rule of each kind, so switching kind never yields a broken one.
+ *
+ * `today` is passed in rather than read from the clock here: every other module
+ * in this codebase takes its clock as a parameter, and a component that reads
+ * the wall clock directly cannot be tested at a fixed instant.
+ */
+function seedRule(kind, previous, today) {
   switch (kind) {
     case 'once':    return { kind: 'once', date: previous.date || today };
     case 'daily':   return { kind: 'daily', from: previous.from || today, every: previous.every || 1 };
@@ -3890,7 +4169,12 @@ function seedRule(kind, previous) {
   }
 }
 
-export function renderRuleInput(initial, onChange) {
+/**
+ * @param {object|null} initial
+ * @param {(rule: object) => void} onChange
+ * @param {string} today  "YYYY-MM-DD", from the caller's clock
+ */
+export function renderRuleInput(initial, onChange, today) {
   let rule = { ...(initial && initial.kind ? initial : { kind: 'weekly', days: [] }) };
   const wrap = el('div', { class: 'rule-input' });
 
@@ -3948,7 +4232,7 @@ export function renderRuleInput(initial, onChange) {
     wrap.append(
       el('select', {
         attrs: { name: 'kind' },
-        on: { change: (e) => { rule = seedRule(e.target.value, rule); emit(); } },
+        on: { change: (e) => { rule = seedRule(e.target.value, rule, today); emit(); } },
       }, RULE_KINDS.map((k) => el('option', {
         attrs: { value: k, selected: rule.kind === k }, text: k,
       }))),
@@ -3970,6 +4254,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { createApp } from '../../src/ui/app.js';
 import { createMemoryDriver } from '../../src/store/memory-driver.js';
+import { occursOn } from '../../src/core/recurrence.js';
 
 const clock = () => new Date(2026, 7, 31, 9, 0).getTime();
 const doc = {
@@ -4034,6 +4319,19 @@ test('a new event is appended with a continuing ref', async () => {
   assert.equal(app.state.doc.events[1].ref, 'C-2');
 });
 
+test('a new event saved without touching Repeats still fires', async () => {
+  // The failure this guards: {kind:'once', date:null} is stored happily and
+  // occursOn rejects it for every date, so the event exists in the document and
+  // appears nowhere at all. Permanently invisible, with no error.
+  const { root, app } = await mount();
+  app.actions.openEvent(null);
+  root.querySelector('[name="name"]').value = 'MOT';
+  root.querySelector('.editor-save').click();
+  const saved = app.state.doc.events.at(-1);
+  assert.equal(saved.rule.date, '2026-08-31', 'defaults to today, not null');
+  assert.ok(occursOn(saved.rule, '2026-08-31'), 'and actually occurs');
+});
+
 test('delete archives the event', async () => {
   const { root, app } = await mount();
   app.actions.openEvent('evt_1');
@@ -4064,7 +4362,7 @@ test('the per-event lead time is optional and stored as a number', async () => {
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
 import { EVENT_FIELDS } from '../core/events.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function field(label, control) {
   return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
@@ -4074,7 +4372,13 @@ const timeValue = (min) => (Number.isFinite(min) ? minutesToLabel(min) : '');
 
 export function renderEventEditor(ctx, event) {
   const form = el('form', { class: 'editor', attrs: { novalidate: true } });
-  let rule = event?.rule || { kind: 'once', date: null };
+  const today = todayKey(ctx.now);
+  // A new event defaults to a rule that ACTUALLY FIRES. `{kind:'once', date:null}`
+  // would be stored happily and rejected by occursOn for every date, so an event
+  // saved without opening the Repeats control would exist in the document and
+  // appear nowhere — permanently. There is no other field for picking a date, so
+  // the default has to be a real one.
+  let rule = event?.rule || { kind: 'once', date: today };
 
   const name = el('input', {
     attrs: { name: 'name', type: 'text', value: event?.name || '',
@@ -4112,7 +4416,7 @@ export function renderEventEditor(ctx, event) {
       el('span', { class: 'label', text: event ? `Event ${event.ref}` : 'New event' }),
     ]),
     field('Name', name),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; })),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, today)),
     field('Starts', startMin),
     field('Ends', endMin),
     field('Extra days', spanDays),
@@ -4135,7 +4439,7 @@ export function renderEventEditor(ctx, event) {
 
 - [ ] **Step 5: Add the actions and route the editor**
 
-In `src/ui/app.js`, add `saveEvent` and `archiveEvent` mirroring `saveTask` / `archiveTask` exactly, but over `doc.events` and calling `createEvent(next, patch, { now })`. Import `createEvent` from `../core/events.js` and `renderEventEditor` from `./event-editor.js`.
+In `src/ui/app.js`, add `saveEvent` and `archiveEvent` mirroring `saveTask` / `archiveTask` exactly, but over `doc.events` and calling `createEvent(next, patch, { now })`. Use the shared `withFreshSeq(doc)` helper for the copy rather than spreading `seq` inline. Import `createEvent` from `../core/events.js` and `renderEventEditor` from `./event-editor.js`.
 
 Extend the editor selection in `render()`:
 
@@ -4163,7 +4467,8 @@ Append to `src/styles/editors.css`:
   color: var(--text-dim);
   font-family: var(--font-label);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
+  font-weight: 600;
   font-size: 10px;
   cursor: pointer;
 }
@@ -4287,7 +4592,7 @@ Expected: FAIL — no `[data-routine]` on TODAY.
         if (editing && editing.id) {
           return { ...doc, routines: doc.routines.map((r) => (r.id === editing.id ? { ...r, ...patch } : r)) };
         }
-        const next = { ...doc, seq: { ...doc.seq } };
+        const next = withFreshSeq(doc);
         return { ...next, routines: [...next.routines, createRoutine(next, patch, { now })] };
       });
       state.editing = null;
@@ -4387,7 +4692,7 @@ and include `routines` first in the returned children, before `...sections`. The
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
 import { ROUTINE_FIELDS } from '../core/routines.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function field(label, control) {
   return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
@@ -4427,7 +4732,7 @@ export function renderRoutineEditor(ctx, routine) {
     ]),
     field('Name', name),
     field('At', timeMin),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; })),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, todayKey(ctx.now))),
     field('Steps', steps),
     el('div', { class: 'editor-actions' }, [
       routine ? el('button', { class: 'btn danger editor-delete', attrs: { type: 'button' },
@@ -4503,7 +4808,7 @@ git commit -m "feat(ui): routines on TODAY with steps, dismissal and editor"
 - Test: `test/core/schedule.test.js`
 
 **Interfaces:**
-- Consumes: `recurrence.js` — `occursOn`; `routines.js` — `liveRoutines`, `routineKey`; `events.js` — `liveEvents`, `spanOf`; `tasks.js` — `liveTasks`, `dueState`; `time.js` — `todayKey`, `addDays`, `parseDateKey`, `minutesToLabel`.
+- Consumes: `recurrence.js` — `occursOn`; `routines.js` — `liveRoutines`, `routineKey`; `events.js` — `liveEvents`; `tasks.js` — `liveTasks`, `dueState`; `time.js` — `todayKey`, `addDays`, `parseDateKey`, `minutesToLabel`.
 - Produces:
   - `WINDOW_DAYS = 14`
   - `CHANNELS = { ROUTINES: 'routines', EVENTS: 'events', DIGEST: 'digest' }`
@@ -4717,6 +5022,30 @@ test('overdue tasks are counted in every digest, not only on their due day', () 
   assert.match(out[0].body, /1 overdue/);
 });
 
+test('a task stays in the digest after its due day, as overdue', () => {
+  // The reference frame that matters is the day the digest FIRES on, not the
+  // day the window was built. Counting overdue against schedule time makes a
+  // task disappear from every digest after its own due day — it is not "due
+  // today" for those days, and it was not yet overdue when scheduled, so it
+  // is counted nowhere at all.
+  //
+  // The fixture is deliberately due AFTER today: a task already overdue at
+  // schedule time is overdue in both frames and so proves nothing.
+  const out = scheduleFor(docWith({ tasks: [task({ dueKey: '2026-09-02' })] }), NOW)
+    .filter((n) => n.channel === CHANNELS.DIGEST);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-02').body, /1 task/);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-05').body, /1 overdue/);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-10').body, /1 overdue/);
+});
+
+test('an all-day event is carried by the digest instead of its own alert', () => {
+  const out = scheduleFor(docWith({
+    events: [event({ startMin: null, endMin: null, rule: { kind: 'once', date: '2026-09-01' } })],
+  }), NOW);
+  assert.equal(out.filter((n) => n.channel === CHANNELS.EVENTS).length, 0);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-01').body, /1 event/);
+});
+
 test('a done task is never counted', () => {
   const out = scheduleFor(docWith({
     tasks: [task({ dueKey: '2026-09-01', status: 'done', doneAt: 1 })],
@@ -4847,10 +5176,16 @@ function eventNotificationsFor(doc, key, defaultLead) {
  * you last opened the app", which is the best a local notification can do
  * without a server.
  */
-function digestBody(doc, key, today) {
+function digestBody(doc, key) {
   const tasks = liveTasks(doc);
-  const overdue = tasks.filter((t) => dueState(t, today) === 'overdue').length;
-  const due = tasks.filter((t) => t.status !== 'done' && t.dueKey === key).length;
+  // BOTH counts are relative to the day this digest FIRES on, never to the day
+  // it was scheduled. Computing overdue against schedule time instead makes a
+  // task vanish from the forecast the moment its own due day passes: it is no
+  // longer "due today" for any later day, and it was not yet overdue when the
+  // window was built, so it is counted nowhere and the digest says "Nothing
+  // due" while the task sits there overdue.
+  const overdue = tasks.filter((t) => dueState(t, key) === 'overdue').length;
+  const due = tasks.filter((t) => dueState(t, key) === 'today').length;
   const routines = liveRoutines(doc).filter((r) => occursOn(r.rule, key)).length;
   const events = liveEvents(doc).filter((e) => occursOn(e.rule, key)).length;
 
@@ -4893,7 +5228,7 @@ export function scheduleFor(doc, nowMs, { windowDays = WINDOW_DAYS } = {}) {
         channel: CHANNELS.DIGEST,
         fireAt: instantAt(key, Number(digest.timeMin) || 0),
         title: 'Today',
-        body: digestBody(doc, key, today),
+        body: digestBody(doc, key),
       });
     }
   }
@@ -4930,7 +5265,7 @@ git commit -m "feat(core): pure notification scheduler over a rolling 14-day win
 **Interfaces:**
 - Consumes: `core/schedule.js` — `scheduleFor`.
 - Produces:
-  - `createNotifier({ backend }) → notifier` with `sync(doc, nowMs) → Promise<{created: string[], cancelled: string[], kept: number}>` and `pending() → Promise<string[]>`
+  - `createNotifier({ backend }) → notifier` with `sync(doc, nowMs) → Promise<{created: string[], cancelled: string[], rescheduled: string[], kept: number}>` and `pending() → Promise<number[]>` (the Android integer ids, not the string keys)
   - `createLogBackend() → backend` — the browser stub, and the test double
   - `androidId(key) → number` — stable 31-bit id from a notification key
   - **Backend contract** (what the next plan's Capacitor implementation must satisfy):
@@ -5259,6 +5594,21 @@ test('the default event lead time is stored as a number', async () => {
   assert.equal(app.state.doc.settings.eventLeadMin, 45);
 });
 
+test('a degraded store is reported, not hidden', async () => {
+  // Silently not saving is the worst failure this app has. The warning
+  // platform/storage.js computes must reach the screen.
+  const { root, app } = await mount();
+  app.state.storage = { degraded: true, reason: 'Storage is blocked here.', label: null };
+  app.render();
+  assert.match(root.textContent, /NOT SAVED/);
+  assert.match(root.textContent, /Storage is blocked here/);
+});
+
+test('a healthy store does not shout about it', async () => {
+  const { root } = await mount();
+  assert.doesNotMatch(root.textContent, /NOT SAVED/);
+});
+
 test('export produces the document as JSON', async () => {
   const { app } = await mount();
   const text = app.actions.exportDoc();
@@ -5326,11 +5676,36 @@ test('adding a routine schedules its occurrences without touching the others', a
 });
 
 test('archiving a routine cancels its notifications', async () => {
+  // Asserts the OUTCOME, not which link of the sync chain reported it.
+  // `archiveRoutine` goes through `actions.update`, which fires
+  // `syncNotifications()` without awaiting; syncs are serialised, so by the time
+  // this awaited call runs the cancellation has already happened and its own
+  // diff correctly reports nothing left to cancel. Asserting `cancelled.length`
+  // here would be asserting the internal bookkeeping of a race the chain exists
+  // to remove.
   const { app, backend } = await mount();
   app.actions.archiveRoutine('rtn_1');
-  const result = await app.syncNotifications();
-  assert.equal(result.cancelled.length, 14);
-  assert.equal((await backend.list()).length, 0);
+  await app.syncNotifications();
+  assert.equal((await backend.list()).length, 0, 'nothing left pending');
+});
+
+test('a nullish rejection neither crashes nor poisons the chain', async () => {
+  // Some native bridges reject with no value. `err.message` on that throws
+  // inside the catch, which rejects the chain head — and a rejected head makes
+  // every later .then(fn) skip fn entirely, silently killing notification
+  // syncing for the rest of the session.
+  const { app, backend } = await mount();
+  backend.schedule = async () => { throw null; };
+  await assert.doesNotReject(() => app.syncNotifications());
+  assert.ok(app.state.notifyError, 'the failure is recorded, not swallowed');
+
+  // The chain must still be usable afterwards.
+  backend.schedule = async () => {};
+  app.actions.openRoutine(null);
+  app.actions.saveRoutine({ name: 'after', timeMin: 1250, steps: [],
+                            rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
+  const after = await app.syncNotifications();
+  assert.notEqual(after, null, 'sync still runs after a nullish failure');
 });
 
 test('a sync failure does not take the app down', async () => {
@@ -5377,21 +5752,35 @@ Add to the returned object:
      */
     syncNotifications() {
       if (!state.doc) return Promise.resolve(null);
-      // Serialised through one chain. `actions.update` fires this without
-      // awaiting, so two syncs can otherwise overlap — and because the diff
-      // reads `known`, which the first has not written yet, the second would
-      // schedule the same occurrences a second time.
-      syncing = syncing.then(async () => {
+
+      const run = async () => {
         try {
           const result = await notifier.sync(state.doc, now());
           state.notifyError = null;
           return result;
         } catch (err) {
-          state.notifyError = err.message || String(err);
+          // `err` may be nullish. Some native bridges reject with no value at
+          // all, and `err.message` on one of those throws a TypeError INSIDE
+          // this handler — before `state.notifyError` is assigned, so the app
+          // could not even report it.
+          state.notifyError = (err && err.message) || String(err ?? 'Unknown notification error');
           return null;
         }
-      });
-      return syncing;
+      };
+
+      // Serialised through one chain. `actions.update` fires this without
+      // awaiting, so two syncs can otherwise overlap — and because the diff
+      // reads `known`, which the first has not written yet, the second would
+      // schedule the same occurrences a second time.
+      //
+      // `run` is attached to BOTH settle paths, and `syncing` is kept
+      // un-rejected. A rejected chain head is silently fatal: every later
+      // `.then(fn)` with only a fulfillment handler skips `fn` and re-propagates
+      // the rejection, so one bad sync would disable notifications for the rest
+      // of the session with nothing logged and nothing shown.
+      const next = syncing.then(run, run);
+      syncing = next.catch(() => null);
+      return next;
     },
 ```
 
@@ -5519,6 +5908,12 @@ export function renderSettings(ctx) {
       on: { click: () => ctx.actions.setSetting('accentMode', alert ? 'standard' : 'alert') },
     })),
 
+    el('div', { class: 'group-head label bracket', text: 'Storage' }),
+    row('Saving', el('span', {
+      class: ctx.storage.degraded ? 'mono set-error' : 'mono',
+      text: ctx.storage.degraded ? 'NOT SAVED' : (ctx.storage.label || 'On this device'),
+    }), ctx.storage.reason || null),
+
     el('div', { class: 'group-head label bracket', text: 'Data' }),
     row('Backup', el('button', {
       class: 'btn', attrs: { type: 'button' }, text: 'Export',
@@ -5562,9 +5957,32 @@ function readFileInto(file, accept) {
 }
 ```
 
-- [ ] **Step 7: Pass `notifyError` through `ctx`**
+- [ ] **Step 7: Pass `notifyError` and the storage status through `ctx`**
 
-In `render()`, extend `ctx` with `notifyError: state.notifyError`.
+`createApp` currently destructures only `chosen.driver` and throws away the
+`degraded` flag and `reason` string that `platform/storage.js` computed. That
+matters: when IndexedDB is unavailable the app silently falls back to an
+in-memory driver and the user loses everything on close with no warning. The
+warning text exists precisely to be shown, so keep it.
+
+In `createApp`, replace the destructure with one that keeps all three fields:
+
+```js
+  const chosen = driver ? { driver, degraded: false, reason: null } : createStorage();
+```
+
+and record the status on `state`:
+
+```js
+  state.storage = {
+    degraded: !!chosen.degraded,
+    reason: chosen.reason || null,
+    label: chosen.driver.label || null,
+  };
+```
+
+Then in `render()`, extend `ctx` with `notifyError: state.notifyError` and
+`storage: state.storage`.
 
 - [ ] **Step 8: Add badge counts to the tab bar**
 
@@ -5629,9 +6047,22 @@ The app is a working, fully tested mobile web app. Every notification the Androi
 Recorded here so nothing is lost between plans:
 
 1. **Capacitor backend** implementing `list()` / `schedule(items)` / `cancel(ids)` from Task 19, over `@capacitor/local-notifications`.
+   **Its `cancel()` must be a safe no-op on an id that is not currently pending.**
+   The notifier cancels before it schedules, so a partial failure — cancel
+   succeeds, schedule then throws — leaves `known` holding entries the platform
+   no longer has. That self-heals on the next successful sync, but only if
+   re-cancelling an already-cancelled id is harmless. Verify it against the real
+   plugin rather than assuming; if it throws, the notifier needs its `known`
+   update split either side of the write.
 2. **`platform/storage.js`** may gain a Capacitor Filesystem driver so the document is a real file that `adb pull` can retrieve.
 3. **Export/import** replaces `downloadJson` / `FileReader` in `src/ui/settings.js` with Filesystem + Share.
 4. **Manifest permissions** — `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`, `RECEIVE_BOOT_COMPLETED`.
 5. **Three notification channels** registered to match `CHANNELS` in `core/schedule.js`.
 6. **One UI battery guidance** in onboarding — the app must be added to *Never sleeping apps*.
 7. **The portrait accent FX**, reshaped from `reference/.../src/ui/accent-fx.js`.
+8. **`androidId` collision handling.** Notification ids are a one-way 31-bit hash
+   of the occurrence key, with no detection and no fallback. An empirical sweep of
+   5000 realistic keys found zero collisions and the birthday bound for a few
+   hundred pending notifications is around 1e-4, so this is not urgent — but two
+   colliding keys would let one alarm silently clobber or cancel the other, and
+   the native backend is where that would first become observable.

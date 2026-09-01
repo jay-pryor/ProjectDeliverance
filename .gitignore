@@ -1,2 +1,6 @@
 # Reference code pasted in from other repos - not part of this project
 /reference/
+
+# Build output
+/www/
+node_modules/

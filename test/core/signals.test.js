@@ -1,0 +1,41 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { pruneDismissals, attention } from '../../src/core/signals.js';
+import { createEmptyDoc } from '../../src/core/schema.js';
+
+const clock = () => new Date(2026, 7, 31, 9, 0).getTime();
+
+test('dismissals for past days are dropped', () => {
+  const doc = {
+    ...createEmptyDoc({ now: clock }),
+    dismissals: [
+      'rtn_1:2026-08-30',              // yesterday — provably dead
+      'rtn_2:2026-08-31',              // today — still live
+      'evt_1:2026-09-01:tomorrow',     // future — still live
+      'junk-with-no-date',             // cannot match anything we generate
+    ],
+  };
+  assert.deepEqual(pruneDismissals(doc, clock()),
+    ['rtn_2:2026-08-31', 'evt_1:2026-09-01:tomorrow']);
+});
+
+test('pruning an empty list is safe', () => {
+  assert.deepEqual(pruneDismissals({ }, clock()), []);
+});
+
+test('attention counts what each tab is holding', () => {
+  const doc = {
+    ...createEmptyDoc({ now: clock }),
+    tasks: [{ id: 't1', name: 'x', status: 'todo', priority: 'normal', project: null,
+              detail: '', doneAt: null, archived: false, dueKey: '2026-08-20' }],
+    // An event is the point of the calendar count. Asserting `calendar === 0`
+    // against a document with no events at all is vacuous: it would read 0 for
+    // any implementation, including none.
+    events: [{ id: 'evt_1', ref: 'C-1', name: 'Dentist', detail: '',
+               rule: { kind: 'once', date: '2026-08-31' },
+               startMin: 540, endMin: 600, spanDays: 0, leadMin: null, archived: false }],
+  };
+  assert.equal(attention(doc, clock()).today, 1);
+  assert.equal(attention(doc, clock()).calendar, 1);
+  assert.equal(attention({ ...doc, events: [] }, clock()).calendar, 0, 'and back to zero');
+});

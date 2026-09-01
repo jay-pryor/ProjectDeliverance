@@ -1,0 +1,101 @@
+/**
+ * The editor sheet.
+ *
+ * `inset: <top> 0 0` means bottom: 0 — it deliberately covers the tab bar as
+ * well as the screen. A half-finished edit should not be one stray thumb-tap
+ * from being navigated away from, so while the sheet is open its own Cancel and
+ * Save are the only ways out. The generous bottom padding keeps those two clear
+ * of the gesture area rather than reserving room for tabs that are not drawn.
+ */
+
+.editor {
+  position: fixed;
+  inset: var(--inset-top) 0 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 12px calc(var(--tap) + var(--inset-bottom) + 16px);
+  background: var(--panel);
+  border-top: 1px solid var(--accent-dim);
+  overflow-y: auto;
+}
+
+.editor-head { padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+
+.field input,
+.field select,
+.field textarea {
+  min-height: var(--tap);
+  padding: 8px 10px;
+  background: var(--void);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;   /* 16px or Chrome on Android zooms the page on focus */
+}
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-dim); }
+.field input[type="date"] { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.field textarea { min-height: 84px; resize: vertical; }
+
+/* Segmented control. One row of square buttons sharing a hairline, so the set
+   reads as a single control rather than three loose ones. */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.seg-btn {
+  min-height: var(--tap);
+  background: var(--void);
+  border: 0;
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color var(--step) linear, background var(--step) linear;
+}
+.seg-btn[aria-pressed="true"] { color: var(--accent); background: var(--panel-alt); }
+
+.editor-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+
+.btn {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 8px 16px;
+  background: var(--panel-alt);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--step) linear, color var(--step) linear;
+}
+.btn.primary { color: var(--accent); border-color: var(--accent-dim); }
+.btn.danger  { color: var(--crit); }
+.btn.sq { padding: 8px; font-size: 18px; line-height: 1; }
+
+.rule-input { display: flex; flex-direction: column; gap: 8px; }
+.rule-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.rule-day {
+  min-height: var(--tap);
+  background: var(--void);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 10px;
+  cursor: pointer;
+}
+.rule-day[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); background: var(--panel-alt); }
+.rule-summary { color: var(--text-dim); }
