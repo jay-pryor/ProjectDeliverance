@@ -19,9 +19,11 @@ import { createNotifier } from '../platform/notifier.js';
  * @param {() => object|null} opts.getDoc  current document, or null before boot
  * @param {(reason: string|null) => void} opts.onError  called with a reason on
  *   failure and with null on success, so the caller can surface it
+ * @param {Promise<any>} [opts.ready]  settles once the platform is set up —
+ *   channels registered, permission decided. Defaults to already-ready.
  * @returns {{sync: () => Promise<object|null>}}
  */
-export function createNotifySync({ backend, now, getDoc, onError }) {
+export function createNotifySync({ backend, now, getDoc, onError, ready = Promise.resolve() }) {
   const notifier = createNotifier({ backend });
   let syncing = Promise.resolve(null);
 
@@ -37,6 +39,18 @@ export function createNotifySync({ backend, now, getDoc, onError }) {
 
       const run = async () => {
         try {
+          // Ordering, not politeness. Android drops a notification posted to a
+          // channel that does not exist yet, and the plugin's own schedule()
+          // requests POST_NOTIFICATIONS itself when it is not yet granted — so
+          // a schedule racing setup can put two permission requests for one
+          // alias through the bridge at once, and the loser comes back
+          // cancelled. Worse, schedule() rejects the WHOLE call with
+          // NOTIFICATIONS_DISABLED while notifications are off, which throws
+          // before `known` is updated: a first launch where the user grants
+          // permission and then edits nothing would end with no alarms at all
+          // until the next document change. Inside the try, because a gate that
+          // rejected would otherwise escape as an unhandled rejection.
+          await ready;
           const result = await notifier.sync(doc, now());
           onError(null);
           return result;

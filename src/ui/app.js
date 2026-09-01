@@ -60,7 +60,7 @@ function withPatch(task, patch, now) {
   return patch.status != null ? setStatus(merged, patch.status, { now }) : merged;
 }
 
-export function createApp({ root, driver, now = Date.now, backend } = {}) {
+export function createApp({ root, driver, now = Date.now, backend, ready } = {}) {
   const chosen = driver ? { driver, degraded: false, reason: null } : createStorage();
   const store = createStore({ driver: chosen.driver, clock: now });
   const writer = createDebouncedWriter(store, {
@@ -86,7 +86,8 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
     },
   });
   const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null,
-                  month: null, selectedDay: null, notifyError: null, saveError: null };
+                  month: null, selectedDay: null, notifyError: null, notifySetup: null,
+                  saveError: null };
   state.storage = {
     degraded: !!chosen.degraded,
     reason: chosen.reason || null,
@@ -98,6 +99,10 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
     now,
     getDoc: () => state.doc,
     onError: (reason) => { state.notifyError = reason; },
+    // The first sync must queue behind channel registration and the permission
+    // dialog, or it races both. `undefined` here means "already ready", which
+    // is what every test and every browser wants.
+    ready,
   });
 
   const actions = {
@@ -273,7 +278,10 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
       const ctx = { doc: state.doc, now: state.now, filter: state.filter,
                     editing: state.editing, actions,
                     month: state.month, selectedDay: state.selectedDay,
-                    notifyError: state.notifyError, saveError: state.saveError,
+                    // Setup first: it is the standing, actionable condition, and a
+                    // sync failure caused by it only restates it in the plugin's words.
+                    notifyError: state.notifySetup || state.notifyError,
+                    saveError: state.saveError,
                     storage: state.storage };
       const body = state.problem
         ? renderRecovery(state.problem)
@@ -344,10 +352,24 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
     /** Force any pending save to land. Called when the app is backgrounded. */
     flush() { return writer.flush(); },
 
-    /** Surface a platform-level notification problem — permissions, channels —
-     *  through the same field a sync failure uses, so SETTINGS has one place to
-     *  look and the user has one place to read. */
-    reportNotifyIssue(reason) { state.notifyError = reason; app.render(); },
+    /**
+     * Surface a platform-level notification problem — permissions, channels.
+     *
+     * Kept in its own field. A sync failure is transient and is withdrawn when a
+     * later sync succeeds; a setup issue is a standing condition that a
+     * successful schedule does not disprove, and sharing one field meant the
+     * first successful sync erased it — with the ordering gate in place, that is
+     * now every launch.
+     *
+     * The render is guarded because before boot there is no document and no
+     * problem, so `render()` would take the normal-screen branch and throw on
+     * `doc.tasks` — inside a `.then()` with no rejection handler, losing the one
+     * explanation the user gets. Storing it is enough: boot renders next.
+     */
+    reportNotifyIssue(reason) {
+      state.notifySetup = reason;
+      if (state.doc || state.problem) app.render();
+    },
 
     /**
      * Bring Android's pending notifications in line with the document.
