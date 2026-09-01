@@ -13,6 +13,7 @@
  */
 
 import { makeId } from './ids.js';
+import { repairProjects, repairTasks } from './tasks.js';
 
 export const DOC_VERSION = 1;
 
@@ -97,8 +98,8 @@ export function migrate(doc, { now = Date.now } = {}) {
   out.seq = out.seq && typeof out.seq === 'object' ? out.seq : {};
   out.settings = freshSettings(out.settings || {});
 
-  out.projects = Array.isArray(out.projects) ? out.projects : [];
-  out.tasks = Array.isArray(out.tasks) ? out.tasks : [];
+  out.projects = repairProjects(out.projects);
+  out.tasks = repairTasks(out.tasks);
   out.routines = Array.isArray(out.routines) ? out.routines : [];
   out.events = Array.isArray(out.events) ? out.events : [];
   out.dismissals = Array.isArray(out.dismissals) ? out.dismissals.map(String) : [];
