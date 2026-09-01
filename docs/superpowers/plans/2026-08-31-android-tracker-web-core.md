@@ -5022,6 +5022,30 @@ test('overdue tasks are counted in every digest, not only on their due day', () 
   assert.match(out[0].body, /1 overdue/);
 });
 
+test('a task stays in the digest after its due day, as overdue', () => {
+  // The reference frame that matters is the day the digest FIRES on, not the
+  // day the window was built. Counting overdue against schedule time makes a
+  // task disappear from every digest after its own due day — it is not "due
+  // today" for those days, and it was not yet overdue when scheduled, so it
+  // is counted nowhere at all.
+  //
+  // The fixture is deliberately due AFTER today: a task already overdue at
+  // schedule time is overdue in both frames and so proves nothing.
+  const out = scheduleFor(docWith({ tasks: [task({ dueKey: '2026-09-02' })] }), NOW)
+    .filter((n) => n.channel === CHANNELS.DIGEST);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-02').body, /1 task/);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-05').body, /1 overdue/);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-10').body, /1 overdue/);
+});
+
+test('an all-day event is carried by the digest instead of its own alert', () => {
+  const out = scheduleFor(docWith({
+    events: [event({ startMin: null, endMin: null, rule: { kind: 'once', date: '2026-09-01' } })],
+  }), NOW);
+  assert.equal(out.filter((n) => n.channel === CHANNELS.EVENTS).length, 0);
+  assert.match(out.find((n) => n.id === 'dig:2026-09-01').body, /1 event/);
+});
+
 test('a done task is never counted', () => {
   const out = scheduleFor(docWith({
     tasks: [task({ dueKey: '2026-09-01', status: 'done', doneAt: 1 })],
@@ -5152,10 +5176,16 @@ function eventNotificationsFor(doc, key, defaultLead) {
  * you last opened the app", which is the best a local notification can do
  * without a server.
  */
-function digestBody(doc, key, today) {
+function digestBody(doc, key) {
   const tasks = liveTasks(doc);
-  const overdue = tasks.filter((t) => dueState(t, today) === 'overdue').length;
-  const due = tasks.filter((t) => t.status !== 'done' && t.dueKey === key).length;
+  // BOTH counts are relative to the day this digest FIRES on, never to the day
+  // it was scheduled. Computing overdue against schedule time instead makes a
+  // task vanish from the forecast the moment its own due day passes: it is no
+  // longer "due today" for any later day, and it was not yet overdue when the
+  // window was built, so it is counted nowhere and the digest says "Nothing
+  // due" while the task sits there overdue.
+  const overdue = tasks.filter((t) => dueState(t, key) === 'overdue').length;
+  const due = tasks.filter((t) => dueState(t, key) === 'today').length;
   const routines = liveRoutines(doc).filter((r) => occursOn(r.rule, key)).length;
   const events = liveEvents(doc).filter((e) => occursOn(e.rule, key)).length;
 
@@ -5198,7 +5228,7 @@ export function scheduleFor(doc, nowMs, { windowDays = WINDOW_DAYS } = {}) {
         channel: CHANNELS.DIGEST,
         fireAt: instantAt(key, Number(digest.timeMin) || 0),
         title: 'Today',
-        body: digestBody(doc, key, today),
+        body: digestBody(doc, key),
       });
     }
   }
@@ -5235,7 +5265,7 @@ git commit -m "feat(core): pure notification scheduler over a rolling 14-day win
 **Interfaces:**
 - Consumes: `core/schedule.js` — `scheduleFor`.
 - Produces:
-  - `createNotifier({ backend }) → notifier` with `sync(doc, nowMs) → Promise<{created: string[], cancelled: string[], kept: number}>` and `pending() → Promise<string[]>`
+  - `createNotifier({ backend }) → notifier` with `sync(doc, nowMs) → Promise<{created: string[], cancelled: string[], kept: number}>` and `pending() → Promise<number[]>` (the Android integer ids, not the string keys)
   - `createLogBackend() → backend` — the browser stub, and the test double
   - `androidId(key) → number` — stable 31-bit id from a notification key
   - **Backend contract** (what the next plan's Capacitor implementation must satisfy):
@@ -5978,6 +6008,13 @@ The app is a working, fully tested mobile web app. Every notification the Androi
 Recorded here so nothing is lost between plans:
 
 1. **Capacitor backend** implementing `list()` / `schedule(items)` / `cancel(ids)` from Task 19, over `@capacitor/local-notifications`.
+   **Its `cancel()` must be a safe no-op on an id that is not currently pending.**
+   The notifier cancels before it schedules, so a partial failure — cancel
+   succeeds, schedule then throws — leaves `known` holding entries the platform
+   no longer has. That self-heals on the next successful sync, but only if
+   re-cancelling an already-cancelled id is harmless. Verify it against the real
+   plugin rather than assuming; if it throws, the notifier needs its `known`
+   update split either side of the write.
 2. **`platform/storage.js`** may gain a Capacitor Filesystem driver so the document is a real file that `adb pull` can retrieve.
 3. **Export/import** replaces `downloadJson` / `FileReader` in `src/ui/settings.js` with Filesystem + Share.
 4. **Manifest permissions** — `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`, `RECEIVE_BOOT_COMPLETED`.
