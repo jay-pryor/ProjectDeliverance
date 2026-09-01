@@ -366,7 +366,11 @@ test('the fixed palette is present verbatim', async () => {
 
 test('ALERT mode swaps only the two accent tokens', async () => {
   const css = await readFile(CSS, 'utf8');
-  const block = /\[data-accent="alert"\][^{]*\{([^}]*)\}/.exec(css);
+  // Quotes optional: esbuild's CSS printer always strips them from attribute
+  // selectors whose value is a valid identifier, regardless of minify. Both
+  // forms are the same selector, so asserting on the quoted form alone would
+  // be testing incidental formatting rather than meaning.
+  const block = /\[data-accent=["']?alert["']?\][^{]*\{([^}]*)\}/.exec(css);
   assert.ok(block, 'an [data-accent="alert"] block must exist');
   const declared = block[1].match(/--[a-z-]+(?=\s*:)/g) || [];
   assert.deepEqual(
@@ -1204,7 +1208,20 @@ test('flush resolves only once the write has actually landed', async () => {
   // This is the page-unload path. A flush() that resolved while a write was
   // still in flight would lose the last edit — a real bug the reference app's
   // suite caught, and the reason this test exists.
-  const { store } = makeStore();
+  //
+  // The injected latency is load-bearing, not decoration. Against the bare
+  // memory driver — whose writes settle in the same microtask window as the
+  // read that follows — a fire-and-forget flush() that never awaits the drain
+  // passes this test just as happily as a correct one. Only a driver that
+  // actually takes time can tell the two apart.
+  const driver = createMemoryDriver();
+  const realPut = driver.putText.bind(driver);
+  driver.putText = async (name, text) => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return realPut(name, text);
+  };
+  const store = createStore({ driver });
+
   await store.open();
   const writer = createDebouncedWriter(store, { idle: 5, ceiling: 50 });
   writer.schedule({ final: true });
@@ -1385,6 +1402,23 @@ test('accentMode is reflected onto the document element', async () => {
   assert.equal(dom.window.document.documentElement.dataset.accent, 'alert');
 });
 
+test('aria state attributes serialise as strings, not boolean attributes', async () => {
+  // A boolean HTML attribute writes "", so [aria-pressed="true"] would never
+  // match and every pressed style in the app would silently do nothing.
+  const { dom } = mount();
+  const { el } = await import('../../src/ui/dom.js');
+  global.document = dom.window.document;
+  const on = el('button', { attrs: { 'aria-pressed': true } });
+  const off = el('button', { attrs: { 'aria-pressed': false } });
+  assert.equal(on.getAttribute('aria-pressed'), 'true');
+  assert.equal(off.getAttribute('aria-pressed'), 'false');
+  assert.ok(on.matches('[aria-pressed="true"]'));
+  // Non-aria booleans keep HTML boolean-attribute semantics.
+  const plain = el('input', { attrs: { disabled: true, readonly: false } });
+  assert.equal(plain.getAttribute('disabled'), '');
+  assert.equal(plain.hasAttribute('readonly'), false);
+});
+
 test('a damaged document reaches recovery instead of being silently emptied', async () => {
   const { root, app } = mount({ 'state.json': JSON.stringify({ tasks: 'not a list' }) });
   await app.boot();
@@ -1421,7 +1455,18 @@ export function el(tag, opts = {}, children = []) {
   if (opts.class) node.className = opts.class;
   if (opts.text != null) node.textContent = String(opts.text);
   for (const [k, v] of Object.entries(opts.attrs || {})) {
-    if (v == null || v === false) continue;
+    if (v == null) continue;
+    // ARIA states are string-valued, not boolean HTML attributes. Setting
+    // `aria-pressed` to `true` the boolean-attribute way writes an empty
+    // string, so `[aria-pressed="true"]` never matches and the pressed style
+    // never applies; and `false` must be written out rather than dropped,
+    // because "not pressed" and "not a toggle" are different statements to a
+    // screen reader. Serialise both explicitly.
+    if (k.startsWith('aria-') && typeof v === 'boolean') {
+      node.setAttribute(k, String(v));
+      continue;
+    }
+    if (v === false) continue;
     node.setAttribute(k, v === true ? '' : String(v));
   }
   for (const [k, v] of Object.entries(opts.style || {})) node.style[k] = v;
@@ -1511,6 +1556,20 @@ const RENDERERS = {
   calendar: renderCalendar,
   settings: renderSettings,
 };
+
+/**
+ * Apply an editor patch to a task.
+ *
+ * A status change is routed through `setStatus` rather than spread in, so
+ * `doneAt` can never end up disagreeing with `status` — spreading
+ * `{status: 'done'}` straight onto a record would mark it done with no
+ * completion time, which is exactly what `setStatus` exists to prevent.
+ */
+function withPatch(task, patch, now) {
+  const { status, ...rest } = patch;
+  const merged = { ...task, ...rest };
+  return status && status !== task.status ? setStatus(merged, status, { now }) : merged;
+}
 
 export function createApp({ root, driver, now = Date.now } = {}) {
   const chosen = driver ? { driver } : createStorage();
@@ -1824,8 +1883,15 @@ Expected: FAIL — cannot resolve `src/core/tasks.js`.
  * level costs a rendering path and a drag target on a screen that has neither
  * to spare.
  *
- * Pure: nothing here reads a clock it was not handed, and no function mutates
- * its argument.
+ * Pure, with one documented exception: `createProject` and `createTask` call
+ * `nextRef`, which allocates a short reference by incrementing `doc.seq` IN
+ * PLACE. That is inherited from the harvested `ids.js` and kept deliberately —
+ * making it pure would mean threading a new `seq` back through every caller for
+ * no functional gain. Callers that must stay pure copy `doc.seq` first; see
+ * `actions.update` in the UI layer, which does exactly that.
+ *
+ * Everything else here takes its clock as a parameter and returns new records
+ * rather than mutating the ones it is given.
  */
 
 import { makeId, nextRef } from './ids.js';
@@ -2183,7 +2249,14 @@ function taskRow(ctx, task, today) {
   const done = task.status === 'done';
   return el('div', {
     class: `task-row${done ? ' is-done' : ''}`,
-    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority },
+    attrs: {
+      'data-task': task.id,
+      'data-due': dueState(task, today),
+      'data-priority': task.priority,
+      // Carried so the list can show an in-progress task as in-progress.
+      // Without it, DOING is settable in the editor and invisible everywhere else.
+      'data-status': task.status,
+    },
   }, [
     el('button', {
       class: 'task-check',
@@ -2271,6 +2344,12 @@ export function renderTasks(ctx) {
   background: var(--accent);
   border-color: var(--accent);
 }
+/* In progress: a dim fill, distinct from both empty (todo) and solid (done).
+   A square at three fill levels, not three different shapes or hues. */
+.task-row[data-status="doing"] .task-check .mark {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
 
 .task-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .is-done .task-name { color: var(--text-dim); text-decoration: line-through; }
@@ -2286,7 +2365,9 @@ export function renderTasks(ctx) {
 
 .chips { display: flex; gap: 4px; }
 .chip {
-  min-height: 32px;
+  /* --tap, not 32px: these are real buttons and the 44px floor is not waived
+     for being small controls in a header row. */
+  min-height: var(--tap);
   padding: 4px 10px;
   background: var(--panel);
   border: 1px solid var(--rule);
@@ -2440,6 +2521,65 @@ test('delete archives rather than destroying', async () => {
   assert.equal(root.querySelector('[data-task="tsk_1"]'), null, 'and is out of the list');
 });
 
+test('an in-progress task is visibly in progress in the list', async () => {
+  // DOING must not be settable-but-invisible.
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d, tasks: d.tasks.map((t) => ({ ...t, status: 'doing' })) }));
+  assert.equal(root.querySelector('[data-task="tsk_1"]').dataset.status, 'doing');
+});
+
+test('the editor shows the task\'s current status as pressed', async () => {
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d, tasks: d.tasks.map((t) => ({ ...t, status: 'doing' })) }));
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  const pressed = root.querySelectorAll('.seg-btn[aria-pressed="true"]');
+  assert.equal(pressed.length, 1, 'exactly one status is ever current');
+  assert.equal(pressed[0].dataset.status, 'doing');
+});
+
+test('a new task defaults to todo', async () => {
+  const { root, app } = await mount();
+  root.querySelector('.add-task').click();
+  assert.equal(root.querySelector('.seg-btn[aria-pressed="true"]').dataset.status, 'todo');
+  root.querySelector('[name="name"]').value = 'Fresh';
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks.at(-1).status, 'todo');
+});
+
+test('setting status to doing saves it', async () => {
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="doing"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].status, 'doing');
+  assert.equal(app.state.doc.tasks[0].doneAt, null);
+});
+
+test('setting status to done through the editor stamps doneAt', async () => {
+  // Spreading {status:'done'} straight onto the record would mark it done with
+  // no completion time. saveTask routes status through setStatus for exactly
+  // this reason.
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="done"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].status, 'done');
+  assert.equal(app.state.doc.tasks[0].doneAt, clock());
+});
+
+test('clearing done through the editor clears doneAt', async () => {
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d,
+    tasks: d.tasks.map((t) => ({ ...t, status: 'done', doneAt: 123 })) }));
+  // The default 'open' filter hides done work, so the row must be shown before
+  // it can be tapped — otherwise this queries null and throws.
+  app.actions.setFilter('all');
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="doing"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].doneAt, null);
+});
+
 test('the project select offers every live project plus unfiled', async () => {
   const { root } = await mount();
   root.querySelector('.add-task').click();
@@ -2466,12 +2606,16 @@ Add `editing: null` to `state`. Add to `actions`:
       const editing = state.editing;
       actions.update((doc) => {
         if (editing && editing.id) {
-          return { ...doc, tasks: doc.tasks.map((t) => (t.id === editing.id ? { ...t, ...patch } : t)) };
+          return {
+            ...doc,
+            tasks: doc.tasks.map((t) => (t.id === editing.id ? withPatch(t, patch, now) : t)),
+          };
         }
         // createTask mutates doc.seq to allocate a ref, so it runs against a
         // copy — update() must stay a pure doc → doc transform.
         const next = { ...doc, seq: { ...doc.seq } };
-        return { ...next, tasks: [...next.tasks, createTask(next, patch, { now })] };
+        const created = withPatch(createTask(next, {}, { now }), patch, now);
+        return { ...next, tasks: [...next.tasks, created] };
       });
       state.editing = null;
       app.render();
@@ -2515,7 +2659,10 @@ with `import { renderTaskEditor } from './task-editor.js';` at the top.
  */
 
 import { el } from './dom.js';
-import { liveProjects, PRIORITIES, TASK_FIELDS } from '../core/tasks.js';
+import { liveProjects, PRIORITIES, STATUSES, TASK_FIELDS } from '../core/tasks.js';
+
+/** Sentence-case for the three status ids, which are stored lowercase. */
+const STATUS_LABELS = { todo: 'To do', doing: 'Doing', done: 'Done' };
 
 function field(label, control) {
   return el('label', { class: 'field' }, [
@@ -2539,6 +2686,26 @@ export function renderTaskEditor(ctx, task) {
     })),
   ]);
 
+  // A segmented control rather than a select: three options is few enough to
+  // show at once, and status is the field most likely to be changed on the way
+  // past — one tap beats open-pick-close. Squares, not pills, per the palette.
+  let status = task?.status || 'todo';
+  const statusControl = el('div', {
+    class: 'seg', attrs: { role: 'group', 'aria-label': 'Status' },
+  }, STATUSES.map((id) => el('button', {
+    class: 'seg-btn',
+    attrs: { type: 'button', name: 'status', 'data-status': id, 'aria-pressed': status === id },
+    text: STATUS_LABELS[id],
+    on: { click: () => { status = id; paintStatus(); } },
+  })));
+
+  /** Repaint in place: the editor is not re-rendered while it is open. */
+  function paintStatus() {
+    for (const button of statusControl.querySelectorAll('.seg-btn')) {
+      button.setAttribute('aria-pressed', String(button.dataset.status === status));
+    }
+  }
+
   const priority = el('select', { attrs: { name: 'priority' } },
     PRIORITIES.map((p) => el('option', {
       attrs: { value: p, selected: (task?.priority || 'normal') === p }, text: p,
@@ -2557,6 +2724,7 @@ export function renderTaskEditor(ctx, task) {
   function save() {
     ctx.actions.saveTask({
       name: name.value.trim() || TASK_FIELDS.name,
+      status,
       project: project.value || null,
       priority: priority.value,
       dueKey: due.value || null,
@@ -2572,6 +2740,7 @@ export function renderTaskEditor(ctx, task) {
     ]),
     field('Name', name),
     field('Project', project),
+    field('Status', statusControl),
     field('Priority', priority),
     field('Due', due),
     field('Notes', detail),
@@ -2677,6 +2846,25 @@ button.task-name {
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-dim); }
 .field input[type="date"] { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .field textarea { min-height: 84px; resize: vertical; }
+
+/* Segmented control. One row of square buttons sharing a hairline, so the set
+   reads as a single control rather than three loose ones. */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.seg-btn {
+  min-height: var(--tap);
+  background: var(--void);
+  border: 0;
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color var(--step) linear, background var(--step) linear;
+}
+.seg-btn[aria-pressed="true"] { color: var(--accent); background: var(--panel-alt); }
 
 .editor-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
 
@@ -2942,7 +3130,14 @@ export function taskRow(ctx, task, today) {
   const done = task.status === 'done';
   return el('div', {
     class: `task-row${done ? ' is-done' : ''}`,
-    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority },
+    attrs: {
+      'data-task': task.id,
+      'data-due': dueState(task, today),
+      'data-priority': task.priority,
+      // Carried so the list can show an in-progress task as in-progress.
+      // Without it, DOING is settable in the editor and invisible everywhere else.
+      'data-status': task.status,
+    },
   }, [
     el('button', {
       class: 'task-check',
@@ -5265,6 +5460,21 @@ test('the default event lead time is stored as a number', async () => {
   assert.equal(app.state.doc.settings.eventLeadMin, 45);
 });
 
+test('a degraded store is reported, not hidden', async () => {
+  // Silently not saving is the worst failure this app has. The warning
+  // platform/storage.js computes must reach the screen.
+  const { root, app } = await mount();
+  app.state.storage = { degraded: true, reason: 'Storage is blocked here.', label: null };
+  app.render();
+  assert.match(root.textContent, /NOT SAVED/);
+  assert.match(root.textContent, /Storage is blocked here/);
+});
+
+test('a healthy store does not shout about it', async () => {
+  const { root } = await mount();
+  assert.doesNotMatch(root.textContent, /NOT SAVED/);
+});
+
 test('export produces the document as JSON', async () => {
   const { app } = await mount();
   const text = app.actions.exportDoc();
@@ -5525,6 +5735,12 @@ export function renderSettings(ctx) {
       on: { click: () => ctx.actions.setSetting('accentMode', alert ? 'standard' : 'alert') },
     })),
 
+    el('div', { class: 'group-head label bracket', text: 'Storage' }),
+    row('Saving', el('span', {
+      class: ctx.storage.degraded ? 'mono set-error' : 'mono',
+      text: ctx.storage.degraded ? 'NOT SAVED' : (ctx.storage.label || 'On this device'),
+    }), ctx.storage.reason || null),
+
     el('div', { class: 'group-head label bracket', text: 'Data' }),
     row('Backup', el('button', {
       class: 'btn', attrs: { type: 'button' }, text: 'Export',
@@ -5568,9 +5784,32 @@ function readFileInto(file, accept) {
 }
 ```
 
-- [ ] **Step 7: Pass `notifyError` through `ctx`**
+- [ ] **Step 7: Pass `notifyError` and the storage status through `ctx`**
 
-In `render()`, extend `ctx` with `notifyError: state.notifyError`.
+`createApp` currently destructures only `chosen.driver` and throws away the
+`degraded` flag and `reason` string that `platform/storage.js` computed. That
+matters: when IndexedDB is unavailable the app silently falls back to an
+in-memory driver and the user loses everything on close with no warning. The
+warning text exists precisely to be shown, so keep it.
+
+In `createApp`, replace the destructure with one that keeps all three fields:
+
+```js
+  const chosen = driver ? { driver, degraded: false, reason: null } : createStorage();
+```
+
+and record the status on `state`:
+
+```js
+  state.storage = {
+    degraded: !!chosen.degraded,
+    reason: chosen.reason || null,
+    label: chosen.driver.label || null,
+  };
+```
+
+Then in `render()`, extend `ctx` with `notifyError: state.notifyError` and
+`storage: state.storage`.
 
 - [ ] **Step 8: Add badge counts to the tab bar**
 
