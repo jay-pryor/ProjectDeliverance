@@ -4106,11 +4106,16 @@ test('the rule is described in words as it is edited', () => {
 
 import { el } from './dom.js';
 import { RULE_KINDS, describeRule } from '../core/recurrence.js';
-import { DAY_NAMES, todayKey } from '../core/time.js';
+import { DAY_NAMES } from '../core/time.js';
 
-/** A usable rule of each kind, so switching kind never yields a broken one. */
-function seedRule(kind, previous) {
-  const today = todayKey();
+/**
+ * A usable rule of each kind, so switching kind never yields a broken one.
+ *
+ * `today` is passed in rather than read from the clock here: every other module
+ * in this codebase takes its clock as a parameter, and a component that reads
+ * the wall clock directly cannot be tested at a fixed instant.
+ */
+function seedRule(kind, previous, today) {
   switch (kind) {
     case 'once':    return { kind: 'once', date: previous.date || today };
     case 'daily':   return { kind: 'daily', from: previous.from || today, every: previous.every || 1 };
@@ -4121,7 +4126,12 @@ function seedRule(kind, previous) {
   }
 }
 
-export function renderRuleInput(initial, onChange) {
+/**
+ * @param {object|null} initial
+ * @param {(rule: object) => void} onChange
+ * @param {string} today  "YYYY-MM-DD", from the caller's clock
+ */
+export function renderRuleInput(initial, onChange, today) {
   let rule = { ...(initial && initial.kind ? initial : { kind: 'weekly', days: [] }) };
   const wrap = el('div', { class: 'rule-input' });
 
@@ -4179,7 +4189,7 @@ export function renderRuleInput(initial, onChange) {
     wrap.append(
       el('select', {
         attrs: { name: 'kind' },
-        on: { change: (e) => { rule = seedRule(e.target.value, rule); emit(); } },
+        on: { change: (e) => { rule = seedRule(e.target.value, rule, today); emit(); } },
       }, RULE_KINDS.map((k) => el('option', {
         attrs: { value: k, selected: rule.kind === k }, text: k,
       }))),
@@ -4201,6 +4211,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { createApp } from '../../src/ui/app.js';
 import { createMemoryDriver } from '../../src/store/memory-driver.js';
+import { occursOn } from '../../src/core/recurrence.js';
 
 const clock = () => new Date(2026, 7, 31, 9, 0).getTime();
 const doc = {
@@ -4265,6 +4276,19 @@ test('a new event is appended with a continuing ref', async () => {
   assert.equal(app.state.doc.events[1].ref, 'C-2');
 });
 
+test('a new event saved without touching Repeats still fires', async () => {
+  // The failure this guards: {kind:'once', date:null} is stored happily and
+  // occursOn rejects it for every date, so the event exists in the document and
+  // appears nowhere at all. Permanently invisible, with no error.
+  const { root, app } = await mount();
+  app.actions.openEvent(null);
+  root.querySelector('[name="name"]').value = 'MOT';
+  root.querySelector('.editor-save').click();
+  const saved = app.state.doc.events.at(-1);
+  assert.equal(saved.rule.date, '2026-08-31', 'defaults to today, not null');
+  assert.ok(occursOn(saved.rule, '2026-08-31'), 'and actually occurs');
+});
+
 test('delete archives the event', async () => {
   const { root, app } = await mount();
   app.actions.openEvent('evt_1');
@@ -4295,7 +4319,7 @@ test('the per-event lead time is optional and stored as a number', async () => {
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
 import { EVENT_FIELDS } from '../core/events.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function field(label, control) {
   return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
@@ -4305,7 +4329,13 @@ const timeValue = (min) => (Number.isFinite(min) ? minutesToLabel(min) : '');
 
 export function renderEventEditor(ctx, event) {
   const form = el('form', { class: 'editor', attrs: { novalidate: true } });
-  let rule = event?.rule || { kind: 'once', date: null };
+  const today = todayKey(ctx.now);
+  // A new event defaults to a rule that ACTUALLY FIRES. `{kind:'once', date:null}`
+  // would be stored happily and rejected by occursOn for every date, so an event
+  // saved without opening the Repeats control would exist in the document and
+  // appear nowhere — permanently. There is no other field for picking a date, so
+  // the default has to be a real one.
+  let rule = event?.rule || { kind: 'once', date: today };
 
   const name = el('input', {
     attrs: { name: 'name', type: 'text', value: event?.name || '',
@@ -4343,7 +4373,7 @@ export function renderEventEditor(ctx, event) {
       el('span', { class: 'label', text: event ? `Event ${event.ref}` : 'New event' }),
     ]),
     field('Name', name),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; })),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, today)),
     field('Starts', startMin),
     field('Ends', endMin),
     field('Extra days', spanDays),
@@ -4394,7 +4424,8 @@ Append to `src/styles/editors.css`:
   color: var(--text-dim);
   font-family: var(--font-label);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
+  font-weight: 600;
   font-size: 10px;
   cursor: pointer;
 }
@@ -4618,7 +4649,7 @@ and include `routines` first in the returned children, before `...sections`. The
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
 import { ROUTINE_FIELDS } from '../core/routines.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function field(label, control) {
   return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
@@ -4658,7 +4689,7 @@ export function renderRoutineEditor(ctx, routine) {
     ]),
     field('Name', name),
     field('At', timeMin),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; })),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, todayKey(ctx.now))),
     field('Steps', steps),
     el('div', { class: 'editor-actions' }, [
       routine ? el('button', { class: 'btn danger editor-delete', attrs: { type: 'button' },
