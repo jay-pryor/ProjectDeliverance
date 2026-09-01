@@ -17,6 +17,7 @@ import { renderEventEditor } from './event-editor.js';
 import { renderRoutineEditor } from './routine-editor.js';
 import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
+import { createNotifier, createLogBackend } from '../platform/notifier.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
 import { createEvent } from '../core/events.js';
@@ -57,13 +58,21 @@ function withPatch(task, patch, now) {
   return patch.status != null ? setStatus(merged, patch.status, { now }) : merged;
 }
 
-export function createApp({ root, driver, now = Date.now } = {}) {
-  const chosen = driver ? { driver } : createStorage();
+export function createApp({ root, driver, now = Date.now, backend } = {}) {
+  const chosen = driver ? { driver, degraded: false, reason: null } : createStorage();
   const store = createStore({ driver: chosen.driver, clock: now });
   const writer = createDebouncedWriter(store, SAVE_CADENCE);
+  const notifier = createNotifier({ backend: backend || createLogBackend() });
+  /** Tail of the sync chain — see `syncNotifications`. */
+  let syncing = Promise.resolve(null);
 
   const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null,
-                  month: null, selectedDay: null };
+                  month: null, selectedDay: null, notifyError: null };
+  state.storage = {
+    degraded: !!chosen.degraded,
+    reason: chosen.reason || null,
+    label: chosen.driver.label || null,
+  };
 
   const actions = {
     setScreen(name) {
@@ -78,6 +87,8 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       state.doc = next;
       writer.schedule(next);
       app.render();
+      // Fire and forget: the render must not wait on the platform.
+      app.syncNotifications();
     },
     setFilter(name) {
       state.filter = name;
@@ -194,6 +205,32 @@ export function createApp({ root, driver, now = Date.now } = {}) {
         ? doc
         : { ...doc, dismissals: [...doc.dismissals, key] }));
     },
+
+    /** @param {string} path e.g. 'digest.timeMin' or 'accentMode' */
+    setSetting(path, value) {
+      actions.update((doc) => {
+        const [head, tail] = path.split('.');
+        const settings = tail
+          ? { ...doc.settings, [head]: { ...doc.settings[head], [tail]: value } }
+          : { ...doc.settings, [head]: value };
+        return { ...doc, settings };
+      });
+    },
+
+    exportDoc() { return JSON.stringify(state.doc, null, 2); },
+
+    /** @returns {boolean} whether the text was accepted */
+    importDoc(text) {
+      let raw;
+      try { raw = JSON.parse(text); } catch { return false; }
+      const check = validateDoc(raw);
+      if (!check.ok) return false;
+      state.doc = migrate(raw, { now });
+      writer.schedule(state.doc);
+      app.render();
+      app.syncNotifications();
+      return true;
+    },
   };
 
   function recoveryScreen(problem) {
@@ -220,7 +257,8 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       }
       const ctx = { doc: state.doc, now: state.now, filter: state.filter,
                     editing: state.editing, actions,
-                    month: state.month, selectedDay: state.selectedDay };
+                    month: state.month, selectedDay: state.selectedDay,
+                    notifyError: state.notifyError, storage: state.storage };
       const body = state.problem
         ? recoveryScreen(state.problem)
         : RENDERERS[state.screen](ctx);
@@ -276,12 +314,48 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       state.month = `${today.slice(0, 7)}-01`;
       state.selectedDay = today;
       app.render();
+      await app.syncNotifications();
       return app;
     },
 
     /** Force any pending save to land. Called when the app is backgrounded. */
     flush() { return writer.flush(); },
+
+    /**
+     * Bring Android's pending notifications in line with the document.
+     *
+     * Never throws. A notification that could not be scheduled — permission not
+     * granted yet, the platform refusing exact alarms — must not take down an
+     * app that is otherwise working perfectly well; SETTINGS reports it instead.
+     */
+    syncNotifications() {
+      if (!state.doc) return Promise.resolve(null);
+      // Serialised through one chain. `actions.update` fires this without
+      // awaiting, so two syncs can otherwise overlap — and because the diff
+      // reads `known`, which the first has not written yet, the second would
+      // schedule the same occurrences a second time.
+      syncing = syncing.then(async () => {
+        try {
+          const result = await notifier.sync(state.doc, now());
+          state.notifyError = null;
+          return result;
+        } catch (err) {
+          state.notifyError = err.message || String(err);
+          return null;
+        }
+      });
+      return syncing;
+    },
   };
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        state.now = now();
+        app.syncNotifications();
+      }
+    });
+  }
 
   return app;
 }
