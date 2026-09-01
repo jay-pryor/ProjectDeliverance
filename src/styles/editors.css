@@ -81,3 +81,20 @@
 .btn.primary { color: var(--accent); border-color: var(--accent-dim); }
 .btn.danger  { color: var(--crit); }
 .btn.sq { padding: 8px; font-size: 18px; line-height: 1; }
+
+.rule-input { display: flex; flex-direction: column; gap: 8px; }
+.rule-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.rule-day {
+  min-height: var(--tap);
+  background: var(--void);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  cursor: pointer;
+}
+.rule-day[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); background: var(--panel-alt); }
+.rule-summary { color: var(--text-dim); }

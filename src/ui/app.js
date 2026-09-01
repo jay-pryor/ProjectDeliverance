@@ -13,10 +13,12 @@ import { renderTasks } from './tasks.js';
 import { renderCalendar } from './calendar.js';
 import { renderSettings } from './settings.js';
 import { renderTaskEditor } from './task-editor.js';
+import { renderEventEditor } from './event-editor.js';
 import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
+import { createEvent } from '../core/events.js';
 import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js';
 import { pruneDismissals } from '../core/signals.js';
 
@@ -116,6 +118,35 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       state.editing = null;
       app.render();
     },
+
+    /** Create or update, decided by whether the editor was opened on an id. */
+    saveEvent(patch) {
+      const editing = state.editing;
+      actions.update((doc) => {
+        if (editing && editing.id) {
+          return {
+            ...doc,
+            events: doc.events.map((e) => (e.id === editing.id ? { ...e, ...patch } : e)),
+          };
+        }
+        // createEvent mutates doc.seq to allocate a ref, so it runs against a
+        // copy — update() must stay a pure doc → doc transform.
+        const next = { ...doc, seq: { ...doc.seq } };
+        const created = { ...createEvent(next, {}, { now }), ...patch };
+        return { ...next, events: [...next.events, created] };
+      });
+      state.editing = null;
+      app.render();
+    },
+
+    archiveEvent(id) {
+      actions.update((doc) => ({
+        ...doc,
+        events: doc.events.map((e) => (e.id === id ? { ...e, archived: true } : e)),
+      }));
+      state.editing = null;
+      app.render();
+    },
   };
 
   function recoveryScreen(problem) {
@@ -146,8 +177,11 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       const body = state.problem
         ? recoveryScreen(state.problem)
         : RENDERERS[state.screen](ctx);
-      const editor = !state.problem && state.editing?.kind === 'task'
-        ? renderTaskEditor(ctx, (state.doc.tasks || []).find((t) => t.id === state.editing.id) || null)
+      const editor = state.problem ? null
+        : state.editing?.kind === 'task'
+          ? renderTaskEditor(ctx, (state.doc.tasks || []).find((t) => t.id === state.editing.id) || null)
+        : state.editing?.kind === 'event'
+          ? renderEventEditor(ctx, (state.doc.events || []).find((e) => e.id === state.editing.id) || null)
         : null;
       mount(root, body, editor, state.problem ? null : renderTabBar(ctx, SCREENS, state.screen));
     },
