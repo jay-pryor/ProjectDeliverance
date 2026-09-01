@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      android:windowLightNavigationBar arrived in API 27. minSdk is 24, so it
+      belongs here rather than in the base theme, where it would be a lint
+      error on the three API levels that do not have it.
+
+      `false` means LIGHT icons on the navigation bar — correct against a
+      near-black background. On API 35+ this is the only part of the nav bar
+      still under the app's control: the bar colour itself is forced
+      transparent by edge-to-edge and android:navigationBarColor is ignored.
+    -->
+    <style name="AppTheme.NoActionBar" parent="BaseNoActionBar">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+
+</resources>
