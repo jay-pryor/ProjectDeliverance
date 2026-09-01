@@ -7,7 +7,10 @@
  */
 
 import { el } from './dom.js';
-import { liveProjects, PRIORITIES, TASK_FIELDS } from '../core/tasks.js';
+import { liveProjects, PRIORITIES, STATUSES, TASK_FIELDS } from '../core/tasks.js';
+
+/** Sentence-case for the three status ids, which are stored lowercase. */
+const STATUS_LABELS = { todo: 'To do', doing: 'Doing', done: 'Done' };
 
 function field(label, control) {
   return el('label', { class: 'field' }, [
@@ -31,6 +34,26 @@ export function renderTaskEditor(ctx, task) {
     })),
   ]);
 
+  // A segmented control rather than a select: three options is few enough to
+  // show at once, and status is the field most likely to be changed on the way
+  // past — one tap beats open-pick-close. Squares, not pills, per the palette.
+  let status = task?.status || 'todo';
+  const statusControl = el('div', {
+    class: 'seg', attrs: { role: 'group', 'aria-label': 'Status' },
+  }, STATUSES.map((id) => el('button', {
+    class: 'seg-btn',
+    attrs: { type: 'button', name: 'status', 'data-status': id, 'aria-pressed': status === id },
+    text: STATUS_LABELS[id],
+    on: { click: () => { status = id; paintStatus(); } },
+  })));
+
+  /** Repaint in place: the editor is not re-rendered while it is open. */
+  function paintStatus() {
+    for (const button of statusControl.querySelectorAll('.seg-btn')) {
+      button.setAttribute('aria-pressed', String(button.dataset.status === status));
+    }
+  }
+
   const priority = el('select', { attrs: { name: 'priority' } },
     PRIORITIES.map((p) => el('option', {
       attrs: { value: p, selected: (task?.priority || 'normal') === p }, text: p,
@@ -49,6 +72,7 @@ export function renderTaskEditor(ctx, task) {
   function save() {
     ctx.actions.saveTask({
       name: name.value.trim() || TASK_FIELDS.name,
+      status,
       project: project.value || null,
       priority: priority.value,
       dueKey: due.value || null,
@@ -64,6 +88,7 @@ export function renderTaskEditor(ctx, task) {
     ]),
     field('Name', name),
     field('Project', project),
+    field('Status', statusControl),
     field('Priority', priority),
     field('Due', due),
     field('Notes', detail),

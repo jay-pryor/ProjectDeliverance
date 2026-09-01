@@ -27,6 +27,17 @@ const RENDERERS = {
   settings: renderSettings,
 };
 
+/**
+ * Apply a patch to a task. A status change is routed through `setStatus`
+ * rather than spread directly, so `doneAt` is stamped when a task becomes
+ * done and cleared when it moves off done — a plain spread onto the record
+ * would leave `doneAt` stale in both directions.
+ */
+function withPatch(task, patch, now) {
+  const merged = { ...task, ...patch };
+  return patch.status != null ? setStatus(merged, patch.status, { now }) : merged;
+}
+
 export function createApp({ root, driver, now = Date.now } = {}) {
   const chosen = driver ? { driver } : createStorage();
   const store = createStore({ driver: chosen.driver, clock: now });
@@ -69,12 +80,16 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       const editing = state.editing;
       actions.update((doc) => {
         if (editing && editing.id) {
-          return { ...doc, tasks: doc.tasks.map((t) => (t.id === editing.id ? { ...t, ...patch } : t)) };
+          return {
+            ...doc,
+            tasks: doc.tasks.map((t) => (t.id === editing.id ? withPatch(t, patch, now) : t)),
+          };
         }
         // createTask mutates doc.seq to allocate a ref, so it runs against a
         // copy — update() must stay a pure doc → doc transform.
         const next = { ...doc, seq: { ...doc.seq } };
-        return { ...next, tasks: [...next.tasks, createTask(next, patch, { now })] };
+        const created = withPatch(createTask(next, {}, { now }), patch, now);
+        return { ...next, tasks: [...next.tasks, created] };
       });
       state.editing = null;
       app.render();

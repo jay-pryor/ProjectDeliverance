@@ -28,7 +28,8 @@ function taskRow(ctx, task, today) {
   const done = task.status === 'done';
   return el('div', {
     class: `task-row${done ? ' is-done' : ''}`,
-    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority },
+    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority,
+             'data-status': task.status },
   }, [
     el('button', {
       class: 'task-check',

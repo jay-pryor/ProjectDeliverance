@@ -36,6 +36,25 @@
 .field input[type="date"] { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .field textarea { min-height: 84px; resize: vertical; }
 
+/* Segmented control. One row of square buttons sharing a hairline, so the set
+   reads as a single control rather than three loose ones. */
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.seg-btn {
+  min-height: var(--tap);
+  background: var(--void);
+  border: 0;
+  border-radius: 0;
+  color: var(--text-dim);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color var(--step) linear, background var(--step) linear;
+}
+.seg-btn[aria-pressed="true"] { color: var(--accent); background: var(--panel-alt); }
+
 .editor-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
 
 .btn {

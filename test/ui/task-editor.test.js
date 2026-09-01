@@ -95,6 +95,65 @@ test('delete archives rather than destroying', async () => {
   assert.equal(root.querySelector('[data-task="tsk_1"]'), null, 'and is out of the list');
 });
 
+test('an in-progress task is visibly in progress in the list', async () => {
+  // DOING must not be settable-but-invisible.
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d, tasks: d.tasks.map((t) => ({ ...t, status: 'doing' })) }));
+  assert.equal(root.querySelector('[data-task="tsk_1"]').dataset.status, 'doing');
+});
+
+test('the editor shows the task\'s current status as pressed', async () => {
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d, tasks: d.tasks.map((t) => ({ ...t, status: 'doing' })) }));
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  const pressed = root.querySelectorAll('.seg-btn[aria-pressed="true"]');
+  assert.equal(pressed.length, 1, 'exactly one status is ever current');
+  assert.equal(pressed[0].dataset.status, 'doing');
+});
+
+test('a new task defaults to todo', async () => {
+  const { root, app } = await mount();
+  root.querySelector('.add-task').click();
+  assert.equal(root.querySelector('.seg-btn[aria-pressed="true"]').dataset.status, 'todo');
+  root.querySelector('[name="name"]').value = 'Fresh';
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks.at(-1).status, 'todo');
+});
+
+test('setting status to doing saves it', async () => {
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="doing"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].status, 'doing');
+  assert.equal(app.state.doc.tasks[0].doneAt, null);
+});
+
+test('setting status to done through the editor stamps doneAt', async () => {
+  // Spreading {status:'done'} straight onto the record would mark it done with
+  // no completion time. saveTask routes status through setStatus for exactly
+  // this reason.
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="done"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].status, 'done');
+  assert.equal(app.state.doc.tasks[0].doneAt, clock());
+});
+
+test('clearing done through the editor clears doneAt', async () => {
+  const { root, app } = await mount();
+  app.actions.update((d) => ({ ...d,
+    tasks: d.tasks.map((t) => ({ ...t, status: 'done', doneAt: 123 })) }));
+  // The default filter is 'open', which hides done tasks — without this the
+  // row is not in the DOM at all and the click below throws on null.
+  app.actions.setFilter('all');
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  root.querySelector('.seg-btn[data-status="doing"]').click();
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.tasks[0].doneAt, null);
+});
+
 test('the project select offers every live project plus unfiled', async () => {
   const { root } = await mount();
   root.querySelector('.add-task').click();
