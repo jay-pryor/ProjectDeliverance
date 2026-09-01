@@ -5,10 +5,22 @@ import {
   minutesToLabel, labelToMinutes, dayName, formatDayLabel, isWeekend,
 } from '../../src/core/time.js';
 
+test('the suite runs in a timezone where local and UTC differ', () => {
+  // Guard, not a formality. Every test below is about local-vs-UTC, and in a
+  // UTC container they all pass against a toISOString() implementation because
+  // the two answers coincide. If this assertion ever fails, the date tests
+  // beneath it have quietly stopped testing anything.
+  assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'Europe/London');
+  assert.notEqual(new Date(2026, 7, 31).getTimezoneOffset(), 0, 'August is BST, not UTC');
+});
+
 test('dateKey uses local components, not UTC', () => {
-  // 23:30 local on the 31st. toISOString() would report the 1st for anyone
-  // east of Greenwich — this is the bug the local construction prevents.
-  const d = new Date(2026, 7, 31, 23, 30);
+  // 00:30 local on the 31st, during BST (UTC+1). In UTC that instant is 23:30
+  // on the 30th, so a toISOString()-based implementation returns the WRONG day
+  // here — which is the whole point of building the key from local components.
+  // The time matters: a late-evening fixture would agree with UTC in this zone
+  // and prove nothing.
+  const d = new Date(2026, 7, 31, 0, 30);
   assert.equal(dateKey(d), '2026-08-31');
 });
 
