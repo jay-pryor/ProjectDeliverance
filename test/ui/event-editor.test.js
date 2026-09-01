@@ -68,6 +68,37 @@ test('a new event is appended with a continuing ref', async () => {
   assert.equal(app.state.doc.events[1].ref, 'C-2');
 });
 
+test('a new event lands on the day you had selected, not today', async () => {
+  // You tapped a day on the calendar and then tapped +. That day is what you
+  // meant — defaulting to today would silently file it somewhere else, and the
+  // only clue would be the event failing to appear where you were looking.
+  const { root, app } = await mount();
+  app.actions.setScreen('calendar');
+  app.actions.selectDay('2026-09-17');
+  app.actions.openEvent(null);
+  root.querySelector('[name="name"]').value = 'MOT';
+  root.querySelector('.editor-save').click();
+  const saved = app.state.doc.events.at(-1);
+  assert.equal(saved.rule.date, '2026-09-17');
+  assert.ok(occursOn(saved.rule, '2026-09-17'), 'and occurs on that day');
+  assert.ok(!occursOn(saved.rule, '2026-08-31'), 'not on today');
+});
+
+test('switching the repeat kind seeds from the selected day too', async () => {
+  // Picking "monthly" after selecting the 17th should mean day 17, not the
+  // 31st. seedRule reads the same day the date default came from.
+  const { root, app } = await mount();
+  app.actions.setScreen('calendar');
+  app.actions.selectDay('2026-09-17');
+  app.actions.openEvent(null);
+  const kind = root.querySelector('[name="kind"]');
+  kind.value = 'monthly';
+  kind.dispatchEvent(new window.Event('change'));
+  root.querySelector('[name="name"]').value = 'Rent';
+  root.querySelector('.editor-save').click();
+  assert.equal(app.state.doc.events.at(-1).rule.day, 17);
+});
+
 test('a new event saved without touching Repeats still fires', async () => {
   // The failure this guards: {kind:'once', date:null} is stored happily and
   // occursOn rejects it for every date, so the event exists in the document and
