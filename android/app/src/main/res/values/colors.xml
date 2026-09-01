@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- --void from the design tokens. Kept in step with src/styles/tokens.css:
+         this is what shows behind the system bars and before the WebView paints. -->
+    <color name="appBackground">#0A0C10</color>
+</resources>

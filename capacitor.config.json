@@ -3,7 +3,8 @@
   "appName": "Tracker",
   "webDir": "www",
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "backgroundColor": "#0A0C10"
   },
   "plugins": {
     "LocalNotifications": {

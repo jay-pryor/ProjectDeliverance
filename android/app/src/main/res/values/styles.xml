@@ -13,6 +13,27 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+
+        <!--
+          targetSdk is 36, and from API 35 Android forces edge-to-edge and
+          IGNORES android:navigationBarColor / android:statusBarColor. So the
+          bars are transparent and whatever is behind them shows through: the
+          window background until the WebView paints, then the WebView itself
+          (see android.backgroundColor in capacitor.config.json).
+
+          windowBackground is what stops a white flash on launch and a white
+          band behind the gesture bar. It is NOT redundant with the WebView
+          colour — it covers the moments the WebView is not yet drawing.
+        -->
+        <item name="android:windowBackground">@color/appBackground</item>
+
+        <!--
+          These two are still honoured on API 35+: they set the ICON colour on
+          the system bars, not the bar colour. `false` means light icons, which
+          is what a near-black background needs.
+        -->
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 
 
