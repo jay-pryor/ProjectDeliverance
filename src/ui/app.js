@@ -15,6 +15,7 @@ import { renderSettings } from './settings.js';
 import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
+import { setStatus } from '../core/tasks.js';
 
 export const SCREENS = ['today', 'tasks', 'calendar', 'settings'];
 
@@ -30,7 +31,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
   const store = createStore({ driver: chosen.driver, clock: now });
   const writer = createDebouncedWriter(store, SAVE_CADENCE);
 
-  const state = { doc: null, screen: 'today', now: now(), problem: null };
+  const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open' };
 
   const actions = {
     setScreen(name) {
@@ -45,6 +46,18 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       state.doc = next;
       writer.schedule(next);
       app.render();
+    },
+    setFilter(name) {
+      state.filter = name;
+      app.render();
+    },
+    toggleDone(id) {
+      actions.update((doc) => ({
+        ...doc,
+        tasks: doc.tasks.map((t) => (t.id === id
+          ? setStatus(t, t.status === 'done' ? 'todo' : 'done', { now })
+          : t)),
+      }));
     },
   };
 
@@ -70,7 +83,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       if (state.doc) {
         document.documentElement.dataset.accent = state.doc.settings.accentMode || 'standard';
       }
-      const ctx = { doc: state.doc, now: state.now, actions };
+      const ctx = { doc: state.doc, now: state.now, filter: state.filter, actions };
       const body = state.problem
         ? recoveryScreen(state.problem)
         : RENDERERS[state.screen](ctx);
