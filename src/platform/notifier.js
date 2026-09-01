@@ -35,12 +35,24 @@ export function androidId(key) {
  *
  * Records what it was asked to do instead of doing it, so the whole scheduling
  * path is exercised in development and in tests with no native code present.
+ *
+ * Backend contract — the shape `@capacitor/local-notifications` will be adapted
+ * to in the next plan:
+ *
+ *   list()            → Promise<Array<{id: number, key: string}>>
+ *   schedule(items)   → Promise<void>   items as built in `sync`
+ *   cancel(ids)       → Promise<void>   integer ids
+ *
+ * `list()` MUST return the key, not the id alone. `androidId` is a one-way
+ * hash, so a bare id cannot be mapped back to the occurrence it belongs to, and
+ * a session that cannot name what the platform is holding cannot cancel it.
+ * Capacitor round-trips this in the notification's `extra` payload.
  */
 export function createLogBackend() {
   const pending = new Map();   // id → item
   const backend = {
     scheduled: [],
-    async list() { return [...pending.values()].map((i) => ({ id: i.id })); },
+    async list() { return [...pending.values()].map((i) => ({ id: i.id, key: i.key })); },
     async schedule(items) {
       for (const item of items) {
         pending.set(item.id, item);
@@ -58,12 +70,38 @@ export function createNotifier({ backend }) {
   /** key → the payload last handed to the backend, so a changed body or time
    *  can be told from an unchanged one without asking the platform. */
   const known = new Map();
+  let seeded = false;
+
+  /**
+   * Adopt whatever the platform is already holding.
+   *
+   * A cold start knows nothing about alarms a previous session scheduled, and
+   * `cancelled` is derived from `known` — so without this, the first sync after
+   * a restart cancels nothing, and a routine deleted while the app was closed
+   * keeps firing for the rest of its window with no way to stop it. `androidId`
+   * is one-way, so the ids alone cannot be mapped back to keys; the backend
+   * returns the key it was given.
+   *
+   * Seeded entries carry a null payload, so a still-wanted occurrence is simply
+   * re-scheduled over itself (harmless — the same integer id replaces the live
+   * alarm) and one that is no longer wanted is cancelled, which is the point.
+   *
+   * The flag is only raised once the list has actually arrived. A bridge that is
+   * not ready yet rejects, `sync` rejects with it, and the NEXT sync tries
+   * again — latching the flag on the way in would spend the session's one
+   * chance to adopt on a call that returned nothing. Seeding twice is harmless
+   * anyway: it writes the same keys to the same nulls.
+   */
+  async function seedFromBackend() {
+    if (seeded) return;
+    const held = await backend.list();
+    for (const item of held) {
+      if (item && item.key) known.set(item.key, null);
+    }
+    seeded = true;
+  }
 
   return {
-    async pending() {
-      return (await backend.list()).map((n) => n.id);
-    },
-
     /**
      * Bring the platform in line with what the document says should exist.
      *
@@ -71,6 +109,7 @@ export function createNotifier({ backend }) {
      *                    rescheduled: string[], kept: number}>}
      */
     async sync(doc, nowMs) {
+      await seedFromBackend();
       const desired = scheduleFor(doc, nowMs);
       const wanted = new Map(desired.map((n) => [n.id, n]));
 

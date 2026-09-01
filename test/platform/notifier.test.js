@@ -96,3 +96,37 @@ test('a backend failure surfaces rather than being swallowed', async () => {
     /permission denied/,
   );
 });
+
+test('a second session adopts and can cancel what the first scheduled', async () => {
+  // known is session-local. Without seeding from the backend, the first sync
+  // after a restart derives `cancelled` from an empty map and orphans every
+  // alarm the previous session left behind — permanently, since androidId is
+  // one-way and nothing else can identify them.
+  const backend = createLogBackend();
+  const doc = docWith({ routines: [routine()] });
+  await createNotifier({ backend }).sync(doc, NOW);
+  assert.equal((await backend.list()).length, 14);
+
+  // A new session over the same backend, with the routine now gone.
+  const fresh = createNotifier({ backend });
+  const result = await fresh.sync(docWith({ routines: [] }), NOW);
+  assert.equal(result.cancelled.length, 14, 'adopts then cancels');
+  assert.equal((await backend.list()).length, 0, 'nothing orphaned');
+});
+
+test('an adoption that failed is retried, not spent', async () => {
+  // The session gets one chance to learn what the platform is holding. If the
+  // bridge is not ready on the first sync and the attempt is marked done
+  // anyway, every alarm the previous session left is orphaned for good.
+  const backend = createLogBackend();
+  await createNotifier({ backend }).sync(docWith({ routines: [routine()] }), NOW);
+
+  const fresh = createNotifier({ backend });
+  const realList = backend.list;
+  backend.list = async () => { throw new Error('bridge not ready'); };
+  await assert.rejects(() => fresh.sync(docWith({ routines: [] }), NOW), /bridge not ready/);
+
+  backend.list = realList;
+  const result = await fresh.sync(docWith({ routines: [] }), NOW);
+  assert.equal(result.cancelled.length, 14, 'the retry still adopts');
+});
