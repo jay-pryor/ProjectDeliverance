@@ -15,23 +15,38 @@
       does not exist below 27 — declaring it in the base theme is a lint error,
       not merely inert.
     -->
-    <style name="BaseNoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!--
+      Theme.AppCompat, not Theme.AppCompat.DayNight. DayNight follows the
+      SYSTEM light/dark setting, so on a phone in light mode it resolved to the
+      light theme and the navigation bar came out white. This app has one
+      appearance and does not track the system.
+    -->
+    <style name="BaseNoActionBar" parent="Theme.AppCompat.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
 
         <!--
-          targetSdk is 36, and from API 35 Android forces edge-to-edge and
-          IGNORES android:navigationBarColor / android:statusBarColor. So the
-          bars are transparent and whatever is behind them shows through: the
-          window background until the WebView paints, then the WebView itself
-          (see android.backgroundColor in capacitor.config.json).
+          Two mechanisms, because which one applies depends on whether the app
+          is actually running edge-to-edge, and Capacitor does nothing either
+          way (no setDecorFitsSystemWindows, no bar handling anywhere in
+          BridgeActivity).
 
-          windowBackground is what stops a white flash on launch and a white
-          band behind the gesture bar. It is NOT redundant with the WebView
-          colour — it covers the moments the WebView is not yet drawing.
+          If it IS edge-to-edge — Android forces this for targetSdk 35+ — the
+          bars are transparent, these two colours are ignored, and what shows
+          through is windowBackground until the WebView paints and then the
+          WebView itself (android.backgroundColor in capacitor.config.json).
+
+          If it is NOT, these two are what colour the bars, and windowBackground
+          only stops the launch flash.
+
+          Setting all three is not belt-and-braces for its own sake: the two
+          cases are indistinguishable from the source, and every one of these is
+          correct in both.
         -->
         <item name="android:windowBackground">@color/appBackground</item>
+        <item name="android:navigationBarColor">@color/appBackground</item>
+        <item name="android:statusBarColor">@color/appBackground</item>
 
         <!--
           These two are still honoured on API 35+: they set the ICON colour on
