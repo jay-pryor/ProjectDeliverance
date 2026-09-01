@@ -57,7 +57,9 @@
 
 .chips { display: flex; gap: 4px; }
 .chip {
-  min-height: 32px;
+  /* --tap, not 32px: these are real buttons and the 44px floor is not waived
+     for being small controls in a header row. */
+  min-height: var(--tap);
   padding: 4px 10px;
   background: var(--panel);
   border: 1px solid var(--rule);

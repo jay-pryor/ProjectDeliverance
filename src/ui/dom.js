@@ -18,7 +18,18 @@ export function el(tag, opts = {}, children = []) {
   if (opts.class) node.className = opts.class;
   if (opts.text != null) node.textContent = String(opts.text);
   for (const [k, v] of Object.entries(opts.attrs || {})) {
-    if (v == null || v === false) continue;
+    if (v == null) continue;
+    // ARIA states are string-valued, not boolean HTML attributes. Setting
+    // `aria-pressed` to `true` the boolean-attribute way writes an empty
+    // string, so `[aria-pressed="true"]` never matches and the pressed style
+    // never applies; and `false` must be written out rather than dropped,
+    // because "not pressed" and "not a toggle" are different statements to a
+    // screen reader. Serialise both explicitly.
+    if (k.startsWith('aria-') && typeof v === 'boolean') {
+      node.setAttribute(k, String(v));
+      continue;
+    }
+    if (v === false) continue;
     node.setAttribute(k, v === true ? '' : String(v));
   }
   for (const [k, v] of Object.entries(opts.style || {})) node.style[k] = v;

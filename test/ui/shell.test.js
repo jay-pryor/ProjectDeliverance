@@ -72,6 +72,23 @@ test('accentMode is reflected onto the document element', async () => {
   assert.equal(dom.window.document.documentElement.dataset.accent, 'alert');
 });
 
+test('aria state attributes serialise as strings, not boolean attributes', async () => {
+  // A boolean HTML attribute writes "", so [aria-pressed="true"] would never
+  // match and every pressed style in the app would silently do nothing.
+  const { dom } = mount();
+  const { el } = await import('../../src/ui/dom.js');
+  global.document = dom.window.document;
+  const on = el('button', { attrs: { 'aria-pressed': true } });
+  const off = el('button', { attrs: { 'aria-pressed': false } });
+  assert.equal(on.getAttribute('aria-pressed'), 'true');
+  assert.equal(off.getAttribute('aria-pressed'), 'false');
+  assert.ok(on.matches('[aria-pressed="true"]'));
+  // Non-aria booleans keep HTML boolean-attribute semantics.
+  const plain = el('input', { attrs: { disabled: true, readonly: false } });
+  assert.equal(plain.getAttribute('disabled'), '');
+  assert.equal(plain.hasAttribute('readonly'), false);
+});
+
 test('a damaged document reaches recovery instead of being silently emptied', async () => {
   const { root, app } = mount({ 'state.json': JSON.stringify({ tasks: 'not a list' }) });
   await app.boot();
