@@ -74,6 +74,12 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       // cannot land on a date that does not (which +30 days would).
       d.setMonth(d.getMonth() + n);
       state.month = `${dateKey(d).slice(0, 7)}-01`;
+      // Move the selection with the grid. Left behind, it makes the day panel
+      // describe a date in a month the grid is no longer showing, with no cell
+      // highlighted to explain why — the panel reads as stale rather than as
+      // "elsewhere". The 1st exists in every month, so this can never be an
+      // invalid key.
+      state.selectedDay = state.month;
       app.render();
     },
     selectDay(key) { state.selectedDay = key; app.render(); },
@@ -212,7 +218,16 @@ export function createApp({ root, driver, now = Date.now } = {}) {
         state.doc = migrate(raw, { now });
         // Pruned once per launch rather than on a timer: the list only grows
         // when something is dismissed, and nothing else reads it in between.
-        state.doc = { ...state.doc, dismissals: pruneDismissals(state.doc, now()) };
+        const pruned = pruneDismissals(state.doc, now());
+        if (pruned.length !== (state.doc.dismissals || []).length) {
+          state.doc = { ...state.doc, dismissals: pruned };
+          // Persist it. Left in memory, the prune reaches disk only on the next
+          // unrelated edit, so a launch where the user changes nothing leaves
+          // the stored list unpruned — and bounding that list is the whole
+          // reason pruning exists. Guarded, so a launch with nothing to prune
+          // does not spend a write.
+          writer.schedule(state.doc);
+        }
       }
       const today = todayKey(now());
       state.month = `${today.slice(0, 7)}-01`;

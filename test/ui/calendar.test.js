@@ -84,6 +84,16 @@ test('selecting a day lists its events with their times', async () => {
   assert.match(detail.textContent, /09:00–10:00/);
 });
 
+test('paging carries the selection into the new month', async () => {
+  // Otherwise the detail panel describes a day the grid is not showing.
+  const { root, app } = await mount();
+  root.querySelector('[data-day="2026-08-12"]').click();
+  root.querySelector('.cal-next').click();
+  assert.equal(app.state.selectedDay, '2026-09-01');
+  assert.equal(root.querySelector('.cal-day[aria-pressed="true"]').dataset.day, '2026-09-01');
+  assert.match(root.querySelector('.cal-day-detail').textContent, /2026-09-01/);
+});
+
 test('paging months moves the grid and survives a year boundary', async () => {
   const { root, app } = await mount();
   root.querySelector('.cal-next').click();
