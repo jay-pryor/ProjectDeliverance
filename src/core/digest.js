@@ -14,6 +14,8 @@
 
 import { liveTasks, dueState } from './tasks.js';
 import { todayKey } from './time.js';
+import { activeRoutines } from './routines.js';
+import { eventsOnDay } from './events.js';
 
 export function digestFor(doc, nowMs) {
   const today = todayKey(nowMs);
@@ -27,5 +29,13 @@ export function digestFor(doc, nowMs) {
 
   const dueToday = tasks.filter((t) => dueState(t, today) === 'today');
 
-  return { overdue, dueToday, routines: [], events: [] };
+  return {
+    overdue,
+    dueToday,
+    // Only what is due *now* — the routine module's own definition, which is
+    // why a routine you have not reached yet does not clutter the screen.
+    routines: activeRoutines(doc, nowMs),
+    // Every event covering today, including one that started earlier in its span.
+    events: eventsOnDay(doc, today),
+  };
 }

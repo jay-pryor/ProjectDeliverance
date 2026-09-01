@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { digestFor } from '../../src/core/digest.js';
 import { createEmptyDoc } from '../../src/core/schema.js';
+import { createRoutine } from '../../src/core/routines.js';
+import { createEvent } from '../../src/core/events.js';
 
 const clock = () => new Date(2026, 7, 31, 9, 0).getTime();
 
@@ -44,4 +46,24 @@ test('overdue is ordered oldest first', () => {
     task({ id: 'older', dueKey: '2026-08-01' }),
   ]), clock());
   assert.deepEqual(d.overdue.map((t) => t.id), ['older', 'newer']);
+});
+
+test('the digest carries the routines that are due now', () => {
+  const routine = createRoutine({ seq: {} }, {
+    name: 'Meds', rule: { kind: 'daily', from: '2026-08-01', every: 1 }, timeMin: 7 * 60,
+  }, { now: clock });
+  const doc = { ...docWith([]), routines: [routine] };
+  assert.equal(digestFor(doc, clock()).routines.length, 1);
+  // 06:00 — before it is due.
+  assert.equal(digestFor(doc, new Date(2026, 7, 31, 6).getTime()).routines.length, 0);
+});
+
+test('the digest carries today\'s events, including mid-span days', () => {
+  const event = createEvent({ seq: {} }, {
+    name: 'Peter visiting', rule: { kind: 'once', date: '2026-08-30' }, spanDays: 3,
+  }, { now: clock });
+  const doc = { ...docWith([]), events: [event] };
+  const d = digestFor(doc, clock());
+  assert.equal(d.events.length, 1);
+  assert.equal(d.events[0].dayIndex, 1, 'day two of a visit that began yesterday');
 });

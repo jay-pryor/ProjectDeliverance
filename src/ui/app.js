@@ -18,6 +18,7 @@ import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
 import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js';
+import { pruneDismissals } from '../core/signals.js';
 
 export const SCREENS = ['today', 'tasks', 'calendar', 'settings'];
 
@@ -175,6 +176,9 @@ export function createApp({ root, driver, now = Date.now } = {}) {
           return app;
         }
         state.doc = migrate(raw, { now });
+        // Pruned once per launch rather than on a timer: the list only grows
+        // when something is dismissed, and nothing else reads it in between.
+        state.doc = { ...state.doc, dismissals: pruneDismissals(state.doc, now()) };
       }
       const today = todayKey(now());
       state.month = `${today.slice(0, 7)}-01`;
