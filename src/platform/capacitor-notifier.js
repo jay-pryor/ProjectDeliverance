@@ -27,6 +27,18 @@ const DEFAULT = 3;
  *  personal and single-user, so hiding it behind an unlock helps nobody. */
 const PUBLIC = 1;
 
+/**
+ * `vibration` is NOT optional in the way it looks.
+ *
+ * `NotificationChannelManager.createChannel` reads it as
+ * `enableVibration(channel.getBool("vibration") ?: false)` — an omitted flag is
+ * a channel with vibration switched OFF, not a channel left on Android's
+ * default. And a channel's settings are frozen at first creation: every later
+ * `createChannel` call for the same id is ignored, so this cannot be corrected
+ * in a later release. It is only fixable before the first install, or by
+ * uninstalling the app.
+ */
+
 export const CHANNEL_DEFS = [
   {
     id: CHANNELS.ROUTINES,
@@ -34,6 +46,7 @@ export const CHANNEL_DEFS = [
     description: 'Recurring things, at the time they are due',
     importance: HIGH,
     visibility: PUBLIC,
+    vibration: true,
   },
   {
     id: CHANNELS.EVENTS,
@@ -41,6 +54,7 @@ export const CHANNEL_DEFS = [
     description: 'Calendar events, at your chosen lead time',
     importance: HIGH,
     visibility: PUBLIC,
+    vibration: true,
   },
   {
     id: CHANNELS.DIGEST,
@@ -48,6 +62,10 @@ export const CHANNEL_DEFS = [
     description: 'One summary each morning of what the day holds',
     importance: DEFAULT,
     visibility: PUBLIC,
+    // Deliberately not vibrating. The digest is a summary you read when you
+    // pick the phone up, not something worth buzzing a pocket for — the same
+    // decision as its lower importance, and equally permanent.
+    vibration: false,
   },
 ];
 
@@ -115,7 +133,21 @@ export async function checkExactAlarms({ plugin = LocalNotifications } = {}) {
 export function createCapacitorBackend({ plugin = LocalNotifications } = {}) {
   return {
     async list() {
-      const { notifications } = await plugin.getPending();
+      // NOT `getPending()`, despite the name. In the Kotlin that is
+      // `notificationStorage.getSavedNotifications()` with no filter at all, so
+      // it returns already-delivered records too — and `cancel()` keeps a
+      // delivered record (marked cancelled) rather than deleting it. Adopting
+      // those means every cold start cancels occurrences that have already
+      // fired and re-adopts them next launch: churn on every launch, and a
+      // `sync()` result that reports deliveries as cancellations.
+      //
+      // `getAll({state:'SCHEDULED'})` is the same projection with the right
+      // filter — for a one-shot `at` schedule like ours, exactly `!isTriggered()`.
+      // It arrived in plugin 8.3.0, so an older build falls back to the old
+      // behaviour rather than to no adoption at all, which would orphan alarms.
+      const { notifications } = typeof plugin.getAll === 'function'
+        ? await plugin.getAll({ state: 'SCHEDULED' })
+        : await plugin.getPending();
       return (notifications || []).map((n) => ({
         id: n.id,
         // The key must survive a round trip through the platform. `androidId`
