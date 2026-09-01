@@ -5,7 +5,7 @@
  */
 
 import { el } from './dom.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function row(label, control, hint = null) {
   return el('div', { class: 'set-row' }, [
@@ -68,11 +68,16 @@ export function renderSettings(ctx) {
       class: ctx.storage.degraded ? 'mono set-error' : 'mono',
       text: ctx.storage.degraded ? 'NOT SAVED' : (ctx.storage.label || 'On this device'),
     }), ctx.storage.reason || null),
+    // Distinct from the row above: that one means "durable storage is not
+    // available at all", this one means "a save was attempted and refused".
+    ctx.saveError
+      ? el('p', { class: 'set-error mono', text: `Last save failed: ${ctx.saveError}` })
+      : null,
 
     el('div', { class: 'group-head label bracket', text: 'Data' }),
     row('Backup', el('button', {
-      class: 'btn', attrs: { type: 'button' }, text: 'Export',
-      on: { click: () => downloadJson(ctx.actions.exportDoc()) },
+      class: 'btn export-doc', attrs: { type: 'button' }, text: 'Export',
+      on: { click: () => downloadJson(ctx.actions.exportDoc(), ctx.now) },
     }), 'Saves a JSON copy'),
     row('Restore', el('label', { class: 'btn' }, [
       el('span', { text: 'Import' }),
@@ -91,11 +96,14 @@ export function renderSettings(ctx) {
  * and it is here rather than in `platform/` because a whole seam for one button
  * would be more structure than it earns until there are two implementations.
  */
-function downloadJson(text) {
+function downloadJson(text, nowMs) {
   const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `tracker-${new Date().toISOString().slice(0, 10)}.json`;
+  // todayKey, never toISOString: the filename is a date key like every other
+  // date in this app, and a UTC one names the backup for the wrong day for the
+  // hour either side of local midnight.
+  a.download = `tracker-${todayKey(nowMs)}.json`;
   a.click();
   URL.revokeObjectURL(url);
 }

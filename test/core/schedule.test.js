@@ -228,3 +228,20 @@ test('a done task is never counted', () => {
   }), NOW).filter((n) => n.channel === CHANNELS.DIGEST);
   assert.match(out.find((n) => n.id === 'dig:2026-09-01').body, /nothing/i);
 });
+
+test('a multi-day event is named in the digest on every day of its span', () => {
+  // `digestFor` — what TODAY shows — uses `eventsOnDay`, which covers a whole
+  // span. `digestBody` counted start days only, so a three-day visit was
+  // announced on day one and every following day of it said "Nothing due".
+  // The existing guard uses spanDays: 0 and cannot see the difference.
+  const out = scheduleFor(docWith({
+    events: [event({ startMin: null, endMin: null, spanDays: 2,
+                     rule: { kind: 'once', date: '2026-09-01' } })],
+  }), NOW).filter((n) => n.channel === CHANNELS.DIGEST);
+
+  for (const key of ['2026-09-01', '2026-09-02', '2026-09-03']) {
+    assert.match(out.find((n) => n.id === `dig:${key}`).body, /1 event/, key);
+  }
+  assert.match(out.find((n) => n.id === 'dig:2026-09-04').body, /nothing/i,
+    'and stops when the span does');
+});

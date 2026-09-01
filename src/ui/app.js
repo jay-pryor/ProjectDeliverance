@@ -6,12 +6,13 @@
  * incremental update path that can disagree with the document.
  */
 
-import { el, mount } from './dom.js';
+import { mount } from './dom.js';
 import { renderTabBar } from './tab-bar.js';
 import { renderToday } from './today.js';
 import { renderTasks } from './tasks.js';
 import { renderCalendar } from './calendar.js';
 import { renderSettings } from './settings.js';
+import { renderRecovery } from './recovery.js';
 import { renderTaskEditor } from './task-editor.js';
 import { renderEventEditor } from './event-editor.js';
 import { renderRoutineEditor } from './routine-editor.js';
@@ -61,13 +62,34 @@ function withPatch(task, patch, now) {
 export function createApp({ root, driver, now = Date.now, backend } = {}) {
   const chosen = driver ? { driver, degraded: false, reason: null } : createStorage();
   const store = createStore({ driver: chosen.driver, clock: now });
-  const writer = createDebouncedWriter(store, SAVE_CADENCE);
+  const writer = createDebouncedWriter(store, {
+    ...SAVE_CADENCE,
+    /**
+     * Silently not saving is the worst failure this app has.
+     *
+     * `state.storage.degraded` only ever means "IndexedDB is not available at
+     * all". A write that was accepted and then rejected — quota exceeded,
+     * storage evicted, a full device — is a different failure and just as
+     * total, and without this it reached nobody: the writer swallows it by
+     * design so a failed save cannot spin, and told only this callback.
+     */
+    onStateChange: (phase, err) => {
+      if (phase === 'error') {
+        state.saveError = (err && err.message) || String(err ?? 'Unknown save error');
+      } else if (phase === 'saved' && state.saveError !== null) {
+        state.saveError = null;
+      } else {
+        return;   // 'dirty' and 'saving' are not news, and redrawing on them costs.
+      }
+      app.render();
+    },
+  });
   const notifier = createNotifier({ backend: backend || createLogBackend() });
   /** Tail of the sync chain — see `syncNotifications`. */
   let syncing = Promise.resolve(null);
 
   const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null,
-                  month: null, selectedDay: null, notifyError: null };
+                  month: null, selectedDay: null, notifyError: null, saveError: null };
   state.storage = {
     degraded: !!chosen.degraded,
     reason: chosen.reason || null,
@@ -233,17 +255,6 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
     },
   };
 
-  function recoveryScreen(problem) {
-    return el('div', { class: 'screen' }, [
-      el('div', { class: 'screen-head' }, [
-        el('span', { class: 'mark', style: { background: 'var(--crit)' } }),
-        el('span', { class: 'screen-title', text: 'Recovery' }),
-      ]),
-      el('p', { text: 'Your data could not be read, so nothing has been changed.' }),
-      el('p', { class: 'mono', text: problem }),
-    ]);
-  }
-
   const app = {
     state,
     actions,
@@ -258,9 +269,10 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
       const ctx = { doc: state.doc, now: state.now, filter: state.filter,
                     editing: state.editing, actions,
                     month: state.month, selectedDay: state.selectedDay,
-                    notifyError: state.notifyError, storage: state.storage };
+                    notifyError: state.notifyError, saveError: state.saveError,
+                    storage: state.storage };
       const body = state.problem
-        ? recoveryScreen(state.problem)
+        ? renderRecovery(state.problem)
         : RENDERERS[state.screen](ctx);
       const editor = state.problem ? null
         : state.editing?.kind === 'task'
@@ -279,7 +291,14 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
       try {
         raw = await store.read();
       } catch (err) {
-        state.problem = 'The saved file is not valid JSON.';
+        // Two very different failures arrive here. `store.read()` throws a
+        // SyntaxError when state.json is present but unparseable, and re-throws
+        // whatever the driver threw when the storage layer itself could not be
+        // reached. Blaming the file for a driver fault sends the user hunting
+        // through a JSON file that is perfectly fine.
+        state.problem = err instanceof SyntaxError
+          ? 'The saved file is not valid JSON.'
+          : `Storage could not be read: ${(err && err.message) || String(err ?? 'unknown error')}`;
         app.render();
         return app;
       }

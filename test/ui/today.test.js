@@ -52,3 +52,31 @@ test('completing from TODAY removes the row', async () => {
   assert.equal(app.state.doc.tasks.find((t) => t.id === 'tsk_2').status, 'done');
   assert.equal(root.querySelector('[data-task="tsk_2"]'), null);
 });
+
+test("today's events appear on TODAY and open for editing", async () => {
+  // `digestFor` already computes them and the digest notification counts them,
+  // so a TODAY that does not render them makes that notification a dead end:
+  // it says "1 event", you tap through, and the screen shows nothing.
+  const { root, app } = await mount({ ...doc, events: [
+    { id: 'evt_1', ref: 'C-1', name: 'Peter visiting', detail: '',
+      // Started yesterday, runs three days — so it is covered by eventsOnDay
+      // rather than by occursOn on today alone.
+      rule: { kind: 'once', date: '2026-08-30' },
+      startMin: null, endMin: null, spanDays: 2, leadMin: null, archived: false },
+  ] });
+  const entry = root.querySelector('.cal-entry[data-event="evt_1"]');
+  assert.ok(entry, 'an event covering today belongs on TODAY');
+  assert.match(entry.textContent, /Peter visiting/);
+  assert.match(entry.textContent, /All day/);
+  assert.match(entry.textContent, /Day 2 of 3/);
+  entry.click();
+  assert.deepEqual(app.state.editing, { kind: 'event', id: 'evt_1' });
+  assert.equal(root.querySelector('[name="name"]').value, 'Peter visiting');
+});
+
+test('a day with no events grows no events heading', async () => {
+  const { root } = await mount({ ...doc, events: [] });
+  assert.equal(root.querySelector('.cal-entry'), null);
+  const heads = [...root.querySelectorAll('.group-head')].map((h) => h.textContent.toLowerCase());
+  assert.ok(!heads.some((h) => h.includes('event')));
+});

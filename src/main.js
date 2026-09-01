@@ -10,7 +10,11 @@ const app = createApp({ root });
 app.boot().catch((err) => {
   root.textContent = '';
   const pre = document.createElement('pre');
-  pre.style.cssText = 'padding:24px;color:#D45D5D;font-family:monospace;white-space:pre-wrap';
+  // Tokens, not literals — app.css is already loaded by the time boot can fail,
+  // so the one screen that only appears when things are broken still looks like
+  // the app rather than like a browser error page.
+  pre.style.cssText = 'padding:24px;color:var(--crit);'
+    + 'font-family:var(--font-mono);white-space:pre-wrap';
   pre.textContent = `Failed to start:\n${err && err.stack ? err.stack : err}`;
   root.appendChild(pre);
 });

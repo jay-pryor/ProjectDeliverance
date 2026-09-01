@@ -11,8 +11,9 @@ function mount(seed) {
   global.window = dom.window;
   global.document = dom.window.document;
   const root = dom.window.document.getElementById('app');
-  const app = createApp({ root, driver: createMemoryDriver({ seed }), now: clock });
-  return { dom, root, app };
+  const driver = createMemoryDriver({ seed });
+  const app = createApp({ root, driver, now: clock });
+  return { dom, root, app, driver };
 }
 
 test('boot renders a tab bar with one tab per screen', async () => {
@@ -94,4 +95,22 @@ test('a damaged document reaches recovery instead of being silently emptied', as
   await app.boot();
   assert.match(root.textContent, /could not be read/i);
   assert.equal(app.state.doc, null, 'nothing is written over the damaged file');
+});
+
+test('a storage failure at boot is not blamed on the JSON', async () => {
+  // `store.read()` throws a SyntaxError for an unparseable file and whatever
+  // the driver threw for everything else. Reporting "not valid JSON" for a
+  // driver fault sends the user hunting through a file that is perfectly fine.
+  const { root, app, driver } = mount({ 'state.json': '{"tasks":[]}' });
+  driver.setFault((op) => (op === 'getText' ? new Error('database is closed') : null));
+  await app.boot();
+  assert.match(root.textContent, /could not be read/i);
+  assert.match(root.textContent, /database is closed/);
+  assert.doesNotMatch(root.textContent, /valid JSON/i);
+});
+
+test('an unparseable state file still says exactly that', async () => {
+  const { root, app } = mount({ 'state.json': '{ not json' });
+  await app.boot();
+  assert.match(root.textContent, /not valid JSON/i);
 });

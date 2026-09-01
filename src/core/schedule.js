@@ -19,7 +19,7 @@
 
 import { occursOn } from './recurrence.js';
 import { liveRoutines, routineKey } from './routines.js';
-import { liveEvents } from './events.js';
+import { liveEvents, eventsOnDay } from './events.js';
 import { liveTasks, dueState } from './tasks.js';
 import { todayKey, addDays, parseDateKey, minutesToLabel } from './time.js';
 
@@ -28,8 +28,16 @@ import { todayKey, addDays, parseDateKey, minutesToLabel } from './time.js';
  *
  * A `daily` rule is an infinite series and Android caps pending alarms, so the
  * expansion has to stop somewhere. Fourteen days is far past any plausible gap
- * between app opens, and the window is recomputed on every open and once a day,
- * so it is self-healing: a missed recompute costs nothing until day 15.
+ * between app opens.
+ *
+ * The window is recomputed when the app opens and whenever it returns to the
+ * foreground (`boot()` and the `visibilitychange` handler in ui/app.js) — and
+ * at NO other time. There is no daily timer: a WebView that is not running
+ * cannot hold one. So the self-healing is only as good as the user's habit of
+ * opening the app, and a device left untouched for a fortnight runs out of
+ * scheduled alarms on day 15 and goes silent until the app is opened again.
+ * Closing that gap needs a boot receiver and a periodic native job, which is
+ * Plan 2's work; it cannot be done from here.
  */
 export const WINDOW_DAYS = 14;
 
@@ -123,7 +131,11 @@ function digestBody(doc, key) {
   const overdue = tasks.filter((t) => dueState(t, key) === 'overdue').length;
   const due = tasks.filter((t) => dueState(t, key) === 'today').length;
   const routines = liveRoutines(doc).filter((r) => occursOn(r.rule, key)).length;
-  const events = liveEvents(doc).filter((e) => occursOn(e.rule, key)).length;
+  // eventsOnDay, not occursOn: the same function digestFor uses, so the
+  // notification and the TODAY screen it points at count the same things. A
+  // multi-day event covers every day of its span; counting start days only made
+  // day two of a three-day visit report "Nothing due".
+  const events = eventsOnDay(doc, key).length;
 
   const parts = [];
   if (due) parts.push(plural(due, 'task'));

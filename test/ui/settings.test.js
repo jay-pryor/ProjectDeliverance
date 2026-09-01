@@ -11,16 +11,33 @@ const doc = {
   projects: [], tasks: [], routines: [], events: [],
 };
 
-async function mount() {
+async function mount(at = clock) {
   const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>');
   global.window = dom.window;
   global.document = dom.window.document;
   const root = dom.window.document.getElementById('app');
-  const app = createApp({ root, now: clock,
-    driver: createMemoryDriver({ seed: { 'state.json': JSON.stringify(doc) } }) });
+  const driver = createMemoryDriver({ seed: { 'state.json': JSON.stringify(doc) } });
+  const app = createApp({ root, now: at, driver });
   await app.boot();
   app.actions.setScreen('settings');
-  return { dom, root, app };
+  return { dom, root, app, driver };
+}
+
+/** Press Export and report the filename the anchor was given. */
+function exportFilename(dom, root) {
+  const real = dom.window.document.createElement.bind(dom.window.document);
+  let name = null;
+  dom.window.document.createElement = (tag) => {
+    const node = real(tag);
+    if (tag === 'a') node.click = () => { name = node.download; };
+    return node;
+  };
+  try {
+    root.querySelector('.export-doc').click();
+  } finally {
+    dom.window.document.createElement = real;
+  }
+  return name;
 }
 
 test('the accent toggle flips the mode and the document element', async () => {
@@ -83,4 +100,35 @@ test('import replaces the document, but refuses junk', async () => {
 
   assert.equal(app.actions.importDoc(JSON.stringify({ ...doc, id: 'doc_2' })), true);
   assert.equal(app.state.doc.id, 'doc_2');
+});
+
+test('exporting names the backup for the local day', async () => {
+  // 00:30 on 1 July in London (BST) is 23:30 on 30 June UTC, so
+  // toISOString().slice(0, 10) names the file for the wrong day — and the whole
+  // codebase's rule is that a date key comes from local components. The date is
+  // also nowhere near the real one, so a filename read off `new Date()` instead
+  // of the app's clock cannot pass by coincidence.
+  const at = () => new Date(2026, 6, 1, 0, 30).getTime();
+  assert.equal(new Date(at()).toISOString().slice(0, 10), '2026-06-30',
+    'the fixture must actually straddle the UTC boundary');
+
+  const { dom, root } = await mount(at);
+  assert.equal(exportFilename(dom, root), 'tracker-2026-07-01.json');
+});
+
+test('a save that actually fails is reported, not swallowed', async () => {
+  // The app reported degraded storage only when IndexedDB was absent entirely.
+  // A write that is accepted and then rejects — quota exceeded, storage
+  // eviction, a full device — left the user believing everything was saved,
+  // which is the worst failure this app has.
+  const { root, app, driver } = await mount();
+  driver.setFault((op) => (op === 'putText' ? new Error('quota exceeded') : null));
+  app.actions.setSetting('eventLeadMin', 30);
+  await app.flush();
+  assert.match(root.textContent, /quota exceeded/, 'the failure reaches SETTINGS');
+
+  driver.setFault(null);
+  app.actions.setSetting('eventLeadMin', 45);
+  await app.flush();
+  assert.doesNotMatch(root.textContent, /quota exceeded/, 'and clears once a save lands');
 });

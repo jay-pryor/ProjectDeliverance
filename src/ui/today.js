@@ -7,6 +7,7 @@ import { el } from './dom.js';
 import { digestFor } from '../core/digest.js';
 import { todayKey, minutesToLabel } from '../core/time.js';
 import { taskRow } from './task-row.js';
+import { eventEntry } from './event-entry.js';
 import { describeRoutine, nextRoutineDue } from '../core/routines.js';
 
 function section(title, tasks, ctx, today) {
@@ -79,11 +80,26 @@ export function renderToday(ctx) {
       ])
     : upcomingRoutine(ctx);
 
-  const body = [routines, ...sections].filter(Boolean);
+  // The spec's TODAY is "routines due now, today's events on a time spine,
+  // tasks due today or overdue". `digestFor` has always computed the events —
+  // and the digest notification counts them — so a screen that ignored them
+  // made that notification a dead end. Same markup as CALENDAR's day panel, so
+  // one record never reads as two different things.
+  const events = digest.events.length
+    ? el('div', {}, [
+        el('div', { class: 'group-head label bracket', text: 'Events' }),
+        el('div', { class: 'stack' }, digest.events.map((entry) => eventEntry(ctx, entry))),
+      ])
+    : null;
+
+  const body = [routines, events, ...sections].filter(Boolean);
 
   return el('div', { class: 'screen' }, [
     el('div', { class: 'screen-head' }, [
-      el('span', { class: (sections.length || digest.routines.length) ? 'mark live' : 'mark' }),
+      el('span', {
+        class: (sections.length || digest.routines.length || digest.events.length)
+          ? 'mark live' : 'mark',
+      }),
       el('span', { class: 'screen-title', text: 'Today' }),
       el('span', { style: { flex: '1' } }),
       el('button', {

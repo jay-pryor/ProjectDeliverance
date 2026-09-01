@@ -7,7 +7,8 @@
  */
 
 import { el } from './dom.js';
-import { eventsOnDay, describeEventTime } from '../core/events.js';
+import { eventsOnDay } from '../core/events.js';
+import { eventEntry } from './event-entry.js';
 import { parseDateKey, addDays, todayKey, MONTH_NAMES, DAY_NAMES } from '../core/time.js';
 
 /** Every day the grid draws: whole weeks, Monday first, covering the month. */
@@ -50,16 +51,7 @@ function dayDetail(ctx) {
   return el('div', { class: 'cal-day-detail' }, [
     el('div', { class: 'group-head label bracket', text: key || '' }),
     entries.length
-      ? el('div', { class: 'stack' }, entries.map(({ event, dayIndex, span }) => el('button', {
-          class: 'cal-entry', attrs: { type: 'button', 'data-event': event.id },
-          on: { click: () => ctx.actions.openEvent(event.id) },
-        }, [
-          el('span', { class: 'cal-entry-name', text: event.name }),
-          span > 0
-            ? el('span', { class: 'label', text: `Day ${dayIndex + 1} of ${span + 1}` })
-            : null,
-          el('span', { class: 'cal-entry-time mono', text: describeEventTime(event) }),
-        ])))
+      ? el('div', { class: 'stack' }, entries.map((entry) => eventEntry(ctx, entry)))
       : el('p', { class: 'empty label', text: 'Nothing on' }),
   ]);
 }
