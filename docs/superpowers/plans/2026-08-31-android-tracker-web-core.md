@@ -5689,6 +5689,25 @@ test('archiving a routine cancels its notifications', async () => {
   assert.equal((await backend.list()).length, 0, 'nothing left pending');
 });
 
+test('a nullish rejection neither crashes nor poisons the chain', async () => {
+  // Some native bridges reject with no value. `err.message` on that throws
+  // inside the catch, which rejects the chain head — and a rejected head makes
+  // every later .then(fn) skip fn entirely, silently killing notification
+  // syncing for the rest of the session.
+  const { app, backend } = await mount();
+  backend.schedule = async () => { throw null; };
+  await assert.doesNotReject(() => app.syncNotifications());
+  assert.ok(app.state.notifyError, 'the failure is recorded, not swallowed');
+
+  // The chain must still be usable afterwards.
+  backend.schedule = async () => {};
+  app.actions.openRoutine(null);
+  app.actions.saveRoutine({ name: 'after', timeMin: 1250, steps: [],
+                            rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
+  const after = await app.syncNotifications();
+  assert.notEqual(after, null, 'sync still runs after a nullish failure');
+});
+
 test('a sync failure does not take the app down', async () => {
   const { app, backend } = await mount();
   backend.schedule = async () => { throw new Error('no permission'); };
@@ -5733,21 +5752,35 @@ Add to the returned object:
      */
     syncNotifications() {
       if (!state.doc) return Promise.resolve(null);
-      // Serialised through one chain. `actions.update` fires this without
-      // awaiting, so two syncs can otherwise overlap — and because the diff
-      // reads `known`, which the first has not written yet, the second would
-      // schedule the same occurrences a second time.
-      syncing = syncing.then(async () => {
+
+      const run = async () => {
         try {
           const result = await notifier.sync(state.doc, now());
           state.notifyError = null;
           return result;
         } catch (err) {
-          state.notifyError = err.message || String(err);
+          // `err` may be nullish. Some native bridges reject with no value at
+          // all, and `err.message` on one of those throws a TypeError INSIDE
+          // this handler — before `state.notifyError` is assigned, so the app
+          // could not even report it.
+          state.notifyError = (err && err.message) || String(err ?? 'Unknown notification error');
           return null;
         }
-      });
-      return syncing;
+      };
+
+      // Serialised through one chain. `actions.update` fires this without
+      // awaiting, so two syncs can otherwise overlap — and because the diff
+      // reads `known`, which the first has not written yet, the second would
+      // schedule the same occurrences a second time.
+      //
+      // `run` is attached to BOTH settle paths, and `syncing` is kept
+      // un-rejected. A rejected chain head is silently fatal: every later
+      // `.then(fn)` with only a fulfillment handler skips `fn` and re-propagates
+      // the rejection, so one bad sync would disable notifications for the rest
+      // of the session with nothing logged and nothing shown.
+      const next = syncing.then(run, run);
+      syncing = next.catch(() => null);
+      return next;
     },
 ```
 
