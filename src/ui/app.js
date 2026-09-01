@@ -17,6 +17,7 @@ import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
+import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js';
 
 export const SCREENS = ['today', 'tasks', 'calendar', 'settings'];
 
@@ -43,7 +44,8 @@ export function createApp({ root, driver, now = Date.now } = {}) {
   const store = createStore({ driver: chosen.driver, clock: now });
   const writer = createDebouncedWriter(store, SAVE_CADENCE);
 
-  const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null };
+  const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null,
+                  month: null, selectedDay: null };
 
   const actions = {
     setScreen(name) {
@@ -63,6 +65,15 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       state.filter = name;
       app.render();
     },
+    stepMonth(n) {
+      const d = parseDateKey(state.month);
+      // setMonth handles the year rollover, and day 1 always exists, so this
+      // cannot land on a date that does not (which +30 days would).
+      d.setMonth(d.getMonth() + n);
+      state.month = `${dateKey(d).slice(0, 7)}-01`;
+      app.render();
+    },
+    selectDay(key) { state.selectedDay = key; app.render(); },
     toggleDone(id) {
       actions.update((doc) => ({
         ...doc,
@@ -74,6 +85,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
 
     openTask(id) { state.editing = { kind: 'task', id: id ?? null }; app.render(); },
     closeEditor() { state.editing = null; app.render(); },
+    openEvent(id) { state.editing = { kind: 'event', id: id ?? null }; app.render(); },
 
     /** Create or update, decided by whether the editor was opened on an id. */
     saveTask(patch) {
@@ -128,7 +140,8 @@ export function createApp({ root, driver, now = Date.now } = {}) {
         document.documentElement.dataset.accent = state.doc.settings.accentMode || 'standard';
       }
       const ctx = { doc: state.doc, now: state.now, filter: state.filter,
-                    editing: state.editing, actions };
+                    editing: state.editing, actions,
+                    month: state.month, selectedDay: state.selectedDay };
       const body = state.problem
         ? recoveryScreen(state.problem)
         : RENDERERS[state.screen](ctx);
@@ -163,6 +176,9 @@ export function createApp({ root, driver, now = Date.now } = {}) {
         }
         state.doc = migrate(raw, { now });
       }
+      const today = todayKey(now());
+      state.month = `${today.slice(0, 7)}-01`;
+      state.selectedDay = today;
       app.render();
       return app;
     },
