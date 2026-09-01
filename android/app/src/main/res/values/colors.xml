@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- --void from the design tokens. Kept in step with src/styles/tokens.css:
-         this is what shows behind the system bars and before the WebView paints. -->
+    <!--
+      The app's background, matching the "void" token in src/styles/tokens.css.
+      This is what shows behind the system bars and before the WebView paints.
+
+      (Written without the CSS variable's leading dashes on purpose: a double
+      hyphen is illegal inside an XML comment and makes this file unparseable.)
+    -->
     <color name="appBackground">#0A0C10</color>
 </resources>
