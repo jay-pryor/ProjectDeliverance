@@ -7,8 +7,9 @@
  */
 
 import { el } from './dom.js';
-import { liveTasks, groupByProject, dueState } from '../core/tasks.js';
-import { todayKey, formatDayLabel } from '../core/time.js';
+import { liveTasks, groupByProject } from '../core/tasks.js';
+import { todayKey } from '../core/time.js';
+import { taskRow } from './task-row.js';
 
 const FILTERS = [
   ['open', 'Open'],
@@ -22,34 +23,6 @@ function filterChips(ctx) {
     text: label,
     on: { click: () => ctx.actions.setFilter(id) },
   })));
-}
-
-function taskRow(ctx, task, today) {
-  const done = task.status === 'done';
-  return el('div', {
-    class: `task-row${done ? ' is-done' : ''}`,
-    attrs: { 'data-task': task.id, 'data-due': dueState(task, today), 'data-priority': task.priority,
-             'data-status': task.status },
-  }, [
-    el('button', {
-      class: 'task-check',
-      attrs: {
-        type: 'button',
-        'aria-label': done ? `Reopen ${task.name}` : `Complete ${task.name}`,
-        'aria-pressed': done,
-      },
-      on: { click: () => ctx.actions.toggleDone(task.id) },
-    }, [el('span', { class: 'mark' })]),
-    el('button', {
-      class: 'task-name',
-      attrs: { type: 'button' },
-      text: task.name,
-      on: { click: () => ctx.actions.openTask(task.id) },
-    }),
-    task.dueKey
-      ? el('span', { class: 'task-due mono', text: formatDayLabel(task.dueKey) })
-      : null,
-  ]);
 }
 
 export function renderTasks(ctx) {
