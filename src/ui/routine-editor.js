@@ -10,7 +10,7 @@
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
 import { ROUTINE_FIELDS } from '../core/routines.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function field(label, control) {
   return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
@@ -50,7 +50,7 @@ export function renderRoutineEditor(ctx, routine) {
     ]),
     field('Name', name),
     field('At', timeMin),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; })),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, todayKey(ctx.now))),
     field('Steps', steps),
     el('div', { class: 'editor-actions' }, [
       routine ? el('button', { class: 'btn danger editor-delete', attrs: { type: 'button' },

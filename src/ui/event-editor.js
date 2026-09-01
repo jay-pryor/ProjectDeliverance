@@ -9,7 +9,7 @@
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
 import { EVENT_FIELDS } from '../core/events.js';
-import { minutesToLabel, labelToMinutes } from '../core/time.js';
+import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
 function field(label, control) {
   return el('label', { class: 'field' }, [el('span', { class: 'label', text: label }), control]);
@@ -19,7 +19,13 @@ const timeValue = (min) => (Number.isFinite(min) ? minutesToLabel(min) : '');
 
 export function renderEventEditor(ctx, event) {
   const form = el('form', { class: 'editor', attrs: { novalidate: true } });
-  let rule = event?.rule || { kind: 'once', date: null };
+  const today = todayKey(ctx.now);
+  // A new event defaults to a rule that ACTUALLY FIRES. `{kind:'once', date:null}`
+  // would be stored happily and rejected by occursOn for every date, so an event
+  // saved without opening the Repeats control would exist in the document and
+  // appear nowhere — permanently. There is no other field for picking a date, so
+  // the default has to be a real one.
+  let rule = event?.rule || { kind: 'once', date: today };
 
   const name = el('input', {
     attrs: { name: 'name', type: 'text', value: event?.name || '',
@@ -57,7 +63,7 @@ export function renderEventEditor(ctx, event) {
       el('span', { class: 'label', text: event ? `Event ${event.ref}` : 'New event' }),
     ]),
     field('Name', name),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; })),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, today)),
     field('Starts', startMin),
     field('Ends', endMin),
     field('Extra days', spanDays),

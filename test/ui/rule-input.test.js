@@ -8,7 +8,7 @@ function setup(rule) {
   global.window = dom.window;
   global.document = dom.window.document;
   const seen = [];
-  const node = renderRuleInput(rule, (r) => seen.push(r));
+  const node = renderRuleInput(rule, (r) => seen.push(r), '2026-08-31');
   dom.window.document.body.appendChild(node);
   return { node, seen };
 }

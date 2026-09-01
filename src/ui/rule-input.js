@@ -8,11 +8,16 @@
 
 import { el } from './dom.js';
 import { RULE_KINDS, describeRule } from '../core/recurrence.js';
-import { DAY_NAMES, todayKey } from '../core/time.js';
+import { DAY_NAMES } from '../core/time.js';
 
-/** A usable rule of each kind, so switching kind never yields a broken one. */
-function seedRule(kind, previous) {
-  const today = todayKey();
+/**
+ * A usable rule of each kind, so switching kind never yields a broken one.
+ *
+ * `today` is passed in rather than read from the clock here: every other module
+ * in this codebase takes its clock as a parameter, and a component that reads
+ * the wall clock directly cannot be tested at a fixed instant.
+ */
+function seedRule(kind, previous, today) {
   switch (kind) {
     case 'once':    return { kind: 'once', date: previous.date || today };
     case 'daily':   return { kind: 'daily', from: previous.from || today, every: previous.every || 1 };
@@ -23,7 +28,12 @@ function seedRule(kind, previous) {
   }
 }
 
-export function renderRuleInput(initial, onChange) {
+/**
+ * @param {object|null} initial
+ * @param {(rule: object) => void} onChange
+ * @param {string} today  "YYYY-MM-DD", from the caller's clock
+ */
+export function renderRuleInput(initial, onChange, today) {
   let rule = { ...(initial && initial.kind ? initial : { kind: 'weekly', days: [] }) };
   const wrap = el('div', { class: 'rule-input' });
 
@@ -81,7 +91,7 @@ export function renderRuleInput(initial, onChange) {
     wrap.append(
       el('select', {
         attrs: { name: 'kind' },
-        on: { change: (e) => { rule = seedRule(e.target.value, rule); emit(); } },
+        on: { change: (e) => { rule = seedRule(e.target.value, rule, today); emit(); } },
       }, RULE_KINDS.map((k) => el('option', {
         attrs: { value: k, selected: rule.kind === k }, text: k,
       }))),

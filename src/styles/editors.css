@@ -92,7 +92,8 @@
   color: var(--text-dim);
   font-family: var(--font-label);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
+  font-weight: 600;
   font-size: 10px;
   cursor: pointer;
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { createApp } from '../../src/ui/app.js';
 import { createMemoryDriver } from '../../src/store/memory-driver.js';
+import { occursOn } from '../../src/core/recurrence.js';
 
 const clock = () => new Date(2026, 7, 31, 9, 0).getTime();
 const doc = {
@@ -65,6 +66,19 @@ test('a new event is appended with a continuing ref', async () => {
   root.querySelector('.editor-save').click();
   assert.equal(app.state.doc.events.length, 2);
   assert.equal(app.state.doc.events[1].ref, 'C-2');
+});
+
+test('a new event saved without touching Repeats still fires', async () => {
+  // The failure this guards: {kind:'once', date:null} is stored happily and
+  // occursOn rejects it for every date, so the event exists in the document and
+  // appears nowhere at all. Permanently invisible, with no error.
+  const { root, app } = await mount();
+  app.actions.openEvent(null);
+  root.querySelector('[name="name"]').value = 'MOT';
+  root.querySelector('.editor-save').click();
+  const saved = app.state.doc.events.at(-1);
+  assert.equal(saved.rule.date, '2026-08-31', 'defaults to today, not null');
+  assert.ok(occursOn(saved.rule, '2026-08-31'), 'and actually occurs');
 });
 
 test('delete archives the event', async () => {
