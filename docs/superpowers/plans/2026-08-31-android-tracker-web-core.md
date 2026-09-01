@@ -5265,7 +5265,7 @@ git commit -m "feat(core): pure notification scheduler over a rolling 14-day win
 **Interfaces:**
 - Consumes: `core/schedule.js` — `scheduleFor`.
 - Produces:
-  - `createNotifier({ backend }) → notifier` with `sync(doc, nowMs) → Promise<{created: string[], cancelled: string[], kept: number}>` and `pending() → Promise<number[]>` (the Android integer ids, not the string keys)
+  - `createNotifier({ backend }) → notifier` with `sync(doc, nowMs) → Promise<{created: string[], cancelled: string[], rescheduled: string[], kept: number}>` and `pending() → Promise<number[]>` (the Android integer ids, not the string keys)
   - `createLogBackend() → backend` — the browser stub, and the test double
   - `androidId(key) → number` — stable 31-bit id from a notification key
   - **Backend contract** (what the next plan's Capacitor implementation must satisfy):
@@ -5676,11 +5676,17 @@ test('adding a routine schedules its occurrences without touching the others', a
 });
 
 test('archiving a routine cancels its notifications', async () => {
+  // Asserts the OUTCOME, not which link of the sync chain reported it.
+  // `archiveRoutine` goes through `actions.update`, which fires
+  // `syncNotifications()` without awaiting; syncs are serialised, so by the time
+  // this awaited call runs the cancellation has already happened and its own
+  // diff correctly reports nothing left to cancel. Asserting `cancelled.length`
+  // here would be asserting the internal bookkeeping of a race the chain exists
+  // to remove.
   const { app, backend } = await mount();
   app.actions.archiveRoutine('rtn_1');
-  const result = await app.syncNotifications();
-  assert.equal(result.cancelled.length, 14);
-  assert.equal((await backend.list()).length, 0);
+  await app.syncNotifications();
+  assert.equal((await backend.list()).length, 0, 'nothing left pending');
 });
 
 test('a sync failure does not take the app down', async () => {
@@ -6021,3 +6027,9 @@ Recorded here so nothing is lost between plans:
 5. **Three notification channels** registered to match `CHANNELS` in `core/schedule.js`.
 6. **One UI battery guidance** in onboarding — the app must be added to *Never sleeping apps*.
 7. **The portrait accent FX**, reshaped from `reference/.../src/ui/accent-fx.js`.
+8. **`androidId` collision handling.** Notification ids are a one-way 31-bit hash
+   of the occurrence key, with no detection and no fallback. An empirical sweep of
+   5000 realistic keys found zero collisions and the birthday bound for a few
+   hundred pending notifications is around 1e-4, so this is not urgent — but two
+   colliding keys would let one alarm silently clobber or cancel the other, and
+   the native backend is where that would first become observable.
