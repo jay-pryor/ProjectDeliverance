@@ -9,6 +9,7 @@
 
 import { el } from './dom.js';
 import { renderRuleInput } from './rule-input.js';
+import { defaultRule } from '../core/recurrence.js';
 import { ROUTINE_FIELDS } from '../core/routines.js';
 import { minutesToLabel, labelToMinutes, todayKey } from '../core/time.js';
 
@@ -18,7 +19,12 @@ function field(label, control) {
 
 export function renderRoutineEditor(ctx, routine) {
   const form = el('form', { class: 'editor', attrs: { novalidate: true } });
-  let rule = routine?.rule || { kind: 'weekly', days: [] };
+  const today = todayKey(ctx.now);
+  // A new routine must default to a rule that ACTUALLY FIRES. `days: []` is
+  // stored happily and rejected by occursOn for every date — and unlike an
+  // event, an invisible routine cannot be reached again: it appears on TODAY
+  // only via activeRoutines/nextRoutineDue, both of which need occursOn.
+  let rule = routine?.rule || defaultRule(today);
 
   const name = el('input', {
     attrs: { name: 'name', type: 'text', value: routine?.name || '',
@@ -50,7 +56,7 @@ export function renderRoutineEditor(ctx, routine) {
     ]),
     field('Name', name),
     field('At', timeMin),
-    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, todayKey(ctx.now))),
+    field('Repeats', renderRuleInput(rule, (next) => { rule = next; }, today)),
     field('Steps', steps),
     el('div', { class: 'editor-actions' }, [
       routine ? el('button', { class: 'btn danger editor-delete', attrs: { type: 'button' },

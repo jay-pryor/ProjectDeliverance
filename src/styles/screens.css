@@ -99,6 +99,20 @@ button.task-name {
 .routine-name { flex: 1; background: none; border: 0; padding: 0; color: var(--text);
                 font: inherit; text-align: left; cursor: pointer; min-height: var(--tap); }
 .routine-time { color: var(--text-dim); font-size: 12px; }
+/* The upcoming-routine line is a control, not a caption — see today.js. Chrome
+   reset only: the type still comes from .empty and .label, as it did when this
+   was a <p>. */
+button.routine-next {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  background: none;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
 .routine-steps { margin: 6px 0 0; padding-left: 22px; color: var(--text-dim); }
 .routine-step { padding: 3px 0; }
 

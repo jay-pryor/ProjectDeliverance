@@ -40,13 +40,24 @@ function routineCard(ctx, { routine, key }) {
   ]);
 }
 
-/** With nothing due, say when rather than showing a blank box. */
+/**
+ * With nothing due, say when rather than showing a blank box.
+ *
+ * A button, not a caption. Once a routine's card is dismissed for the day this
+ * line is the ONLY route back into that record — there is no ROUTINES screen,
+ * and the card does not return until tomorrow — so as a <p> a routine with the
+ * wrong time or the wrong rule could never be corrected or deleted.
+ */
 function upcomingRoutine(ctx) {
   const next = nextRoutineDue(ctx.doc, ctx.now);
   if (!next) return null;
-  return el('p', {
-    class: 'empty label',
+  return el('button', {
+    class: 'empty label routine-next',
+    // Deliberately NOT `data-routine`: that identifies a routine CARD, and a
+    // selector meant to prove a dismissed card is gone would match this line.
+    attrs: { type: 'button', 'data-routine-next': next.routine.id },
     text: `Next: ${next.routine.name} — ${describeRoutine(next.routine)}`,
+    on: { click: () => ctx.actions.openRoutine(next.routine.id) },
   });
 }
 
