@@ -40,7 +40,7 @@ export function androidId(key) {
  * to in the next plan:
  *
  *   list()            → Promise<Array<{id: number, key: string}>>
- *   schedule(items)   → Promise<void>   items as built in `sync`
+ *   schedule(items)   → Promise<{warning?: string}|void>   items as built in `sync`
  *   cancel(ids)       → Promise<void>   integer ids
  *
  * `list()` MUST return the key, not the id alone. `androidId` is a one-way
@@ -106,7 +106,12 @@ export function createNotifier({ backend }) {
      * Bring the platform in line with what the document says should exist.
      *
      * @returns {Promise<{created: string[], cancelled: string[],
-     *                    rescheduled: string[], kept: number}>}
+     *                    rescheduled: string[], kept: number,
+     *                    warning: string|null}>}
+     *
+     * `warning` is a non-fatal report from the backend about work it DID do —
+     * an alarm downgraded to inexact, say. Returned rather than thrown because
+     * the notifications exist and will fire; only their precision is in doubt.
      */
     async sync(doc, nowMs) {
       await seedFromBackend();
@@ -149,14 +154,18 @@ export function createNotifier({ backend }) {
           channel: note.channel,
         };
       });
-      if (toWrite.length) await backend.schedule(toWrite);
+      let warning = null;
+      if (toWrite.length) {
+        const outcome = await backend.schedule(toWrite);
+        warning = (outcome && outcome.warning) || null;
+      }
 
       // Only updated once the backend has accepted the work — a throw above
       // leaves `known` describing what is genuinely still out there.
       for (const key of cancelled) known.delete(key);
       for (const key of [...created, ...rescheduled]) known.set(key, wanted.get(key));
 
-      return { created, cancelled, rescheduled, kept };
+      return { created, cancelled, rescheduled, kept, warning };
     },
   };
 }

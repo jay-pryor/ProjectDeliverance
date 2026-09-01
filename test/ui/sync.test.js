@@ -14,18 +14,28 @@ const doc = {
                rule: { kind: 'daily', from: '2026-08-01', every: 1 }, archived: false }],
 };
 
-async function mount() {
+function build({ ready } = {}) {
   const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>');
   global.window = dom.window;
   global.document = dom.window.document;
   const backend = createLogBackend();
+  const root = dom.window.document.getElementById('app');
   const app = createApp({
-    root: dom.window.document.getElementById('app'), now: clock, backend,
+    root, now: clock, backend, ready,
     driver: createMemoryDriver({ seed: { 'state.json': JSON.stringify(doc) } }),
   });
-  await app.boot();
-  return { app, backend, dom };
+  return { app, backend, dom, root };
 }
+
+async function mount() {
+  const built = build();
+  await built.app.boot();
+  return built;
+}
+
+/** Let every pending microtask settle. Nothing here uses timers, so one turn
+ *  of the macrotask queue drains the whole promise graph. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 test('booting schedules the window', async () => {
   const { backend } = await mount();
@@ -92,4 +102,99 @@ test('a sync failure does not take the app down', async () => {
                             rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
   await assert.doesNotReject(() => app.syncNotifications());
   assert.ok(app.state.notifyError, 'but it is recorded so SETTINGS can report it');
+});
+
+
+// --- the setup gate ---------------------------------------------------------
+
+test('the first sync waits for platform setup, and the UI does not', async () => {
+  // Channels must exist and the permission dialog must be answered before the
+  // first schedule(): a notification posted to an unregistered channel is
+  // dropped, and the plugin requests POST_NOTIFICATIONS itself from inside
+  // schedule() when it is not yet granted, so an overlapping request for the
+  // same alias comes back cancelled. The gate orders them.
+  let open;
+  const ready = new Promise((resolve) => { open = resolve; });
+  const { app, backend, root } = build({ ready });
+
+  const booted = app.boot();
+  await settle();
+  assert.equal(backend.scheduled.length, 0, 'nothing scheduled while setup is outstanding');
+  assert.ok(root.textContent.length > 0, 'but the UI has already painted — it never waits on the platform');
+
+  open();
+  await booted;
+  assert.equal(backend.scheduled.length, 14, 'and the window is scheduled once setup lands');
+});
+
+test('a rejected gate does not wedge syncing forever', async () => {
+  // main.js swallows a failed setup into a resolved gate, but the seam itself
+  // must survive being handed a rejected one: awaiting it inside the try means
+  // a failure is reported, not an unhandled rejection that kills the chain.
+  const { app } = build({ ready: Promise.reject(new Error('channels failed')) });
+  await assert.doesNotReject(() => app.boot());
+  assert.equal(app.state.notifyError, 'channels failed');
+});
+
+// --- reporting a platform issue --------------------------------------------
+
+test('a setup failure reported before boot is kept, not thrown away', async () => {
+  // Setup can finish first — a permanently denied permission returns without a
+  // dialog — while boot is still awaiting storage. Rendering then would take
+  // the normal-screen branch with a null document and throw, and in main.js
+  // that throw lands in a .then() with no rejection handler: the user loses the
+  // one message explaining why nothing ever arrives.
+  const { app, root } = build();
+  assert.doesNotThrow(() => app.reportNotifyIssue('Notifications are blocked.'));
+  assert.equal(app.state.notifySetup, 'Notifications are blocked.');
+  assert.equal(root.textContent, '', 'nothing was painted before there was anything to paint');
+
+  await app.boot();   // whose own sync succeeds — which must not erase it
+  app.actions.setScreen('settings');
+  assert.match(root.textContent, /Notifications are blocked\./,
+    'the reason survives to the screen that reports it');
+});
+
+// --- clearing --------------------------------------------------------------
+
+test('a later successful sync clears a failure that has since gone away', async () => {
+  // Otherwise one transient bridge failure — a sync fired while the WebView was
+  // still coming up, say — pins its message to SETTINGS for the rest of the
+  // session, describing a problem that no longer exists.
+  const { app, backend } = await mount();
+  backend.schedule = async () => { throw new Error('bridge not ready'); };
+  app.actions.openRoutine(null);
+  app.actions.saveRoutine({ name: 'x', timeMin: 1300, steps: [],
+                            rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
+  await app.syncNotifications();
+  assert.equal(app.state.notifyError, 'bridge not ready');
+
+  backend.schedule = async () => {};
+  app.actions.openRoutine(null);
+  app.actions.saveRoutine({ name: 'y', timeMin: 1310, steps: [],
+                            rule: { kind: 'daily', from: '2026-08-01', every: 1 } });
+  await app.syncNotifications();
+  assert.equal(app.state.notifyError, null, 'the stale reason is withdrawn');
+});
+
+test('a downgraded alarm reaches SETTINGS without failing the sync', async () => {
+  // The backend reports a warning alongside work it actually did. It must be
+  // visible — reminders that drift by a quarter of an hour teach the user the
+  // times cannot be trusted — but it must not read as a failure, because the
+  // notifications are scheduled and will fire.
+  // Asserted over boot's own sync — the first launch on a phone that has not
+  // granted exact alarms — because that is one sync, awaited. A change made
+  // afterwards would queue a second, no-op sync behind it, and a sync that
+  // writes nothing has no warning to report.
+  const { app, backend } = build();
+  const real = backend.schedule;
+  backend.schedule = async (items) => {
+    await real(items);
+    return { warning: 'Reminders were scheduled as inexact alarms.' };
+  };
+  await app.boot();
+
+  assert.equal(backend.scheduled.length, 14, 'the alarms were written');
+  assert.equal(app.state.notifyError, 'Reminders were scheduled as inexact alarms.');
+  assert.equal(app.state.problem, null, 'and nothing reads as a failure');
 });

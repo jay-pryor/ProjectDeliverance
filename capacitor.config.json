@@ -1,0 +1,14 @@
+{
+  "appId": "enterprises.onpulse.tracker",
+  "appName": "Tracker",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_tracker",
+      "iconColor": "#57C7E3"
+    }
+  }
+}
