@@ -7,8 +7,15 @@
  * level costs a rendering path and a drag target on a screen that has neither
  * to spare.
  *
- * Pure: nothing here reads a clock it was not handed, and no function mutates
- * its argument.
+ * Pure, with one documented exception: `createProject` and `createTask` call
+ * `nextRef`, which allocates a short reference by incrementing `doc.seq` IN
+ * PLACE. That is inherited from the harvested `ids.js` and kept deliberately —
+ * making it pure would mean threading a new `seq` back through every caller for
+ * no functional gain. Callers that must stay pure copy `doc.seq` first; see
+ * `actions.update` in the UI layer, which does exactly that.
+ *
+ * Everything else here takes its clock as a parameter and returns new records
+ * rather than mutating the ones it is given.
  */
 
 import { makeId, nextRef } from './ids.js';
