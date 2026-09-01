@@ -12,10 +12,14 @@
     "test": "node --import ./test/tz.js --test \"test/**/*.test.js\""
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
-    "jsdom": "^25.0.0",
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@fontsource/ibm-plex-mono": "^5.0.0",
     "@fontsource/ibm-plex-sans": "^5.0.0",
     "@fontsource/ibm-plex-sans-condensed": "^5.0.0",
-    "@fontsource/ibm-plex-mono": "^5.0.0"
+    "esbuild": "^0.25.0",
+    "jsdom": "^25.0.0"
   }
 }

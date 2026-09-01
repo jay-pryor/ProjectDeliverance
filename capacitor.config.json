@@ -1,0 +1,8 @@
+{
+  "appId": "enterprises.onpulse.tracker",
+  "appName": "Tracker",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  }
+}

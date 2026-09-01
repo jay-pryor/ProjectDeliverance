@@ -18,7 +18,8 @@ import { renderEventEditor } from './event-editor.js';
 import { renderRoutineEditor } from './routine-editor.js';
 import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
-import { createNotifier, createLogBackend } from '../platform/notifier.js';
+import { createNotifyBackend } from '../platform/notify-backend.js';
+import { createNotifySync } from './notify-sync.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
 import { createEvent } from '../core/events.js';
@@ -84,10 +85,6 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
       app.render();
     },
   });
-  const notifier = createNotifier({ backend: backend || createLogBackend() });
-  /** Tail of the sync chain — see `syncNotifications`. */
-  let syncing = Promise.resolve(null);
-
   const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null,
                   month: null, selectedDay: null, notifyError: null, saveError: null };
   state.storage = {
@@ -95,6 +92,13 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
     reason: chosen.reason || null,
     label: chosen.driver.label || null,
   };
+
+  const notify = createNotifySync({
+    backend: backend || createNotifyBackend(),
+    now,
+    getDoc: () => state.doc,
+    onError: (reason) => { state.notifyError = reason; },
+  });
 
   const actions = {
     setScreen(name) {
@@ -340,6 +344,11 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
     /** Force any pending save to land. Called when the app is backgrounded. */
     flush() { return writer.flush(); },
 
+    /** Surface a platform-level notification problem — permissions, channels —
+     *  through the same field a sync failure uses, so SETTINGS has one place to
+     *  look and the user has one place to read. */
+    reportNotifyIssue(reason) { state.notifyError = reason; app.render(); },
+
     /**
      * Bring Android's pending notifications in line with the document.
      *
@@ -347,38 +356,7 @@ export function createApp({ root, driver, now = Date.now, backend } = {}) {
      * granted yet, the platform refusing exact alarms — must not take down an
      * app that is otherwise working perfectly well; SETTINGS reports it instead.
      */
-    syncNotifications() {
-      if (!state.doc) return Promise.resolve(null);
-
-      const run = async () => {
-        try {
-          const result = await notifier.sync(state.doc, now());
-          state.notifyError = null;
-          return result;
-        } catch (err) {
-          // `err` may be nullish. Some native bridges reject with no value at
-          // all, and `err.message` on one of those throws a TypeError INSIDE
-          // this handler — before `state.notifyError` is assigned, so the app
-          // could not even report it.
-          state.notifyError = (err && err.message) || String(err ?? 'Unknown notification error');
-          return null;
-        }
-      };
-
-      // Serialised through one chain. `actions.update` fires this without
-      // awaiting, so two syncs can otherwise overlap — and because the diff
-      // reads `known`, which the first has not written yet, the second would
-      // schedule the same occurrences a second time.
-      //
-      // `run` is attached to BOTH settle paths, and `syncing` is kept
-      // un-rejected. A rejected chain head is silently fatal: every later
-      // `.then(fn)` with only a fulfillment handler skips `fn` and re-propagates
-      // the rejection, so one bad sync would disable notifications for the rest
-      // of the session with nothing logged and nothing shown.
-      const next = syncing.then(run, run);
-      syncing = next.catch(() => null);
-      return next;
-    },
+    syncNotifications() { return notify.sync(); },
   };
 
   if (typeof document !== 'undefined' && document.addEventListener) {

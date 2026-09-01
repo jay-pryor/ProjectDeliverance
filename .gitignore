@@ -4,3 +4,10 @@
 # Build output
 /www/
 node_modules/
+
+# Capacitor build output (the android/ project itself IS committed —
+# AndroidManifest.xml is hand-edited and must not be regenerable-away)
+/android/app/build/
+/android/build/
+/android/.gradle/
+/android/app/src/main/assets/public/

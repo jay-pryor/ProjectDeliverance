@@ -3,9 +3,18 @@
  */
 
 import { createApp } from './ui/app.js';
+import { prepareNotifications } from './platform/notify-backend.js';
 
 const root = document.getElementById('app');
 const app = createApp({ root });
+
+// Channels and permissions before the first sync, and only on the device — in a
+// browser this resolves immediately and changes nothing. It never throws: a
+// phone that refuses permission is a working app with no notifications, not a
+// broken app, so the reason is surfaced rather than raised.
+prepareNotifications().then(({ reason }) => {
+  if (reason) app.reportNotifyIssue?.(reason);
+});
 
 app.boot().catch((err) => {
   root.textContent = '';

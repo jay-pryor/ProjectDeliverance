@@ -1,0 +1,155 @@
+/**
+ * The Android backend for the notifier seam.
+ *
+ * Implements the contract `platform/notifier.js` defines — `list()`,
+ * `schedule(items)`, `cancel(ids)` — over `@capacitor/local-notifications`,
+ * which sits on Android's AlarmManager. Nothing above `platform/` changes when
+ * this replaces the log backend; that was the point of the seam.
+ *
+ * The plugin is injected rather than imported at the call site so this module
+ * can be exercised in plain Node against a fake. Every behaviour below is
+ * verifiable without a phone; what a phone adds is whether the OS honours it.
+ */
+
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { CHANNELS } from '../core/schedule.js';
+
+/**
+ * Android importance levels. 4 = HIGH (sound, heads-up banner), 3 = DEFAULT
+ * (sound, no banner). Routines and events interrupt because they are about to
+ * be missed; the morning digest is a summary you read when you pick the phone
+ * up, so it does not shove itself in front of anything.
+ */
+const HIGH = 4;
+const DEFAULT = 3;
+
+/** 1 = VISIBILITY_PUBLIC — the content shows on the lock screen. This app is
+ *  personal and single-user, so hiding it behind an unlock helps nobody. */
+const PUBLIC = 1;
+
+export const CHANNEL_DEFS = [
+  {
+    id: CHANNELS.ROUTINES,
+    name: 'Routines',
+    description: 'Recurring things, at the time they are due',
+    importance: HIGH,
+    visibility: PUBLIC,
+  },
+  {
+    id: CHANNELS.EVENTS,
+    name: 'Events',
+    description: 'Calendar events, at your chosen lead time',
+    importance: HIGH,
+    visibility: PUBLIC,
+  },
+  {
+    id: CHANNELS.DIGEST,
+    name: 'Daily digest',
+    description: 'One summary each morning of what the day holds',
+    importance: DEFAULT,
+    visibility: PUBLIC,
+  },
+];
+
+/**
+ * Register one Android channel per notification kind.
+ *
+ * Three channels rather than one so the digest can be muted in Android's own
+ * settings without losing routine alerts — the spec asks for exactly that, and
+ * it is impossible to retrofit: a notification's channel is fixed when it is
+ * posted, so alarms already scheduled under a single channel stay there.
+ *
+ * Channels are Android-only and creating one that already exists is a no-op,
+ * so this is safe to call on every launch.
+ */
+export async function registerChannels({ plugin = LocalNotifications } = {}) {
+  for (const channel of CHANNEL_DEFS) {
+    await plugin.createChannel(channel);
+  }
+}
+
+/**
+ * Ask for permission to post notifications, if we do not already have it.
+ *
+ * Android 13+ requires this at runtime and the app is silent without it — the
+ * A73 runs One UI 6, so it always applies. Checking first avoids re-prompting
+ * someone who has already decided.
+ *
+ * @returns {Promise<{granted: boolean, state: string}>}
+ */
+export async function ensurePermission({ plugin = LocalNotifications } = {}) {
+  const current = await plugin.checkPermissions();
+  if (current.display === 'granted') return { granted: true, state: current.display };
+
+  // 'denied' here means denied permanently; asking again would do nothing and
+  // the caller should send the user to system settings instead.
+  if (current.display === 'denied') return { granted: false, state: current.display };
+
+  const asked = await plugin.requestPermissions();
+  return { granted: asked.display === 'granted', state: asked.display };
+}
+
+/**
+ * Whether Android will honour exact alarm times.
+ *
+ * Without this the OS batches alarms to save power and a 09:00 routine can
+ * arrive at 09:15 — which quietly teaches the user the times cannot be
+ * trusted. Sideloading avoids the Play Store's restriction on requesting it,
+ * but the user still has to allow it.
+ *
+ * @returns {Promise<{exact: boolean, state: string}>}
+ */
+export async function checkExactAlarms({ plugin = LocalNotifications } = {}) {
+  if (typeof plugin.checkExactNotificationSetting !== 'function') {
+    return { exact: true, state: 'unsupported' };
+  }
+  const status = await plugin.checkExactNotificationSetting();
+  return { exact: status.exact_alarm === 'granted', state: status.exact_alarm };
+}
+
+/**
+ * The backend itself.
+ *
+ * @param {{plugin?: object}} [opts]
+ */
+export function createCapacitorBackend({ plugin = LocalNotifications } = {}) {
+  return {
+    async list() {
+      const { notifications } = await plugin.getPending();
+      return (notifications || []).map((n) => ({
+        id: n.id,
+        // The key must survive a round trip through the platform. `androidId`
+        // is a one-way hash, so on a cold start the integer ids alone cannot
+        // name which occurrence each pending alarm belongs to — and the
+        // notifier would then adopt nothing and orphan every alarm a previous
+        // session scheduled. `extra` is the only field that carries our own
+        // data back out of `getPending()`.
+        key: (n.extra && n.extra.key) || null,
+      }));
+    },
+
+    async schedule(items) {
+      await plugin.schedule({
+        notifications: items.map((item) => ({
+          id: item.id,
+          title: item.title,
+          body: item.body,
+          channelId: item.channel,
+          extra: { key: item.key },
+          schedule: {
+            at: new Date(item.fireAt),
+            // Doze will otherwise defer this to the next maintenance window,
+            // which on a phone left alone overnight can be hours. The whole
+            // point of a routine is that it arrives at its time.
+            allowWhileIdle: true,
+          },
+        })),
+      });
+    },
+
+    async cancel(ids) {
+      if (!ids.length) return;
+      await plugin.cancel({ notifications: ids.map((id) => ({ id })) });
+    },
+  };
+}
