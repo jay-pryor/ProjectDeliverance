@@ -39,7 +39,12 @@ function taskRow(ctx, task, today) {
       },
       on: { click: () => ctx.actions.toggleDone(task.id) },
     }, [el('span', { class: 'mark' })]),
-    el('span', { class: 'task-name', text: task.name }),
+    el('button', {
+      class: 'task-name',
+      attrs: { type: 'button' },
+      text: task.name,
+      on: { click: () => ctx.actions.openTask(task.id) },
+    }),
     task.dueKey
       ? el('span', { class: 'task-due mono', text: formatDayLabel(task.dueKey) })
       : null,
@@ -58,6 +63,12 @@ export function renderTasks(ctx) {
       el('span', { class: 'screen-title', text: 'Tasks' }),
       el('span', { style: { flex: '1' } }),
       filterChips(ctx),
+      el('button', {
+        class: 'btn sq add-task',
+        attrs: { type: 'button', 'aria-label': 'New task' },
+        text: '+',
+        on: { click: () => ctx.actions.openTask(null) },
+      }),
     ]),
     ...(groups.length
       ? groups.flatMap((group) => [

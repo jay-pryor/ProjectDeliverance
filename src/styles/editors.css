@@ -1,0 +1,59 @@
+/**
+ * The editor sheet. Covers the screen but not the tab bar, so the way out is
+ * always visible.
+ */
+
+.editor {
+  position: fixed;
+  inset: var(--inset-top) 0 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 12px calc(var(--tap) + var(--inset-bottom) + 16px);
+  background: var(--panel);
+  border-top: 1px solid var(--accent-dim);
+  overflow-y: auto;
+}
+
+.editor-head { padding-bottom: 8px; border-bottom: 1px solid var(--rule); }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+
+.field input,
+.field select,
+.field textarea {
+  min-height: var(--tap);
+  padding: 8px 10px;
+  background: var(--void);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 16px;   /* 16px or Chrome on Android zooms the page on focus */
+}
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-dim); }
+.field input[type="date"] { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.field textarea { min-height: 84px; resize: vertical; }
+
+.editor-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; }
+
+.btn {
+  min-height: var(--tap);
+  min-width: var(--tap);
+  padding: 8px 16px;
+  background: var(--panel-alt);
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--text);
+  font-family: var(--font-label);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color var(--step) linear, color var(--step) linear;
+}
+.btn.primary { color: var(--accent); border-color: var(--accent-dim); }
+.btn.danger  { color: var(--crit); }
+.btn.sq { padding: 8px; font-size: 18px; line-height: 1; }

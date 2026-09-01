@@ -12,10 +12,11 @@ import { renderToday } from './today.js';
 import { renderTasks } from './tasks.js';
 import { renderCalendar } from './calendar.js';
 import { renderSettings } from './settings.js';
+import { renderTaskEditor } from './task-editor.js';
 import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
-import { setStatus } from '../core/tasks.js';
+import { setStatus, createTask } from '../core/tasks.js';
 
 export const SCREENS = ['today', 'tasks', 'calendar', 'settings'];
 
@@ -31,7 +32,7 @@ export function createApp({ root, driver, now = Date.now } = {}) {
   const store = createStore({ driver: chosen.driver, clock: now });
   const writer = createDebouncedWriter(store, SAVE_CADENCE);
 
-  const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open' };
+  const state = { doc: null, screen: 'today', now: now(), problem: null, filter: 'open', editing: null };
 
   const actions = {
     setScreen(name) {
@@ -59,6 +60,34 @@ export function createApp({ root, driver, now = Date.now } = {}) {
           : t)),
       }));
     },
+
+    openTask(id) { state.editing = { kind: 'task', id: id ?? null }; app.render(); },
+    closeEditor() { state.editing = null; app.render(); },
+
+    /** Create or update, decided by whether the editor was opened on an id. */
+    saveTask(patch) {
+      const editing = state.editing;
+      actions.update((doc) => {
+        if (editing && editing.id) {
+          return { ...doc, tasks: doc.tasks.map((t) => (t.id === editing.id ? { ...t, ...patch } : t)) };
+        }
+        // createTask mutates doc.seq to allocate a ref, so it runs against a
+        // copy — update() must stay a pure doc → doc transform.
+        const next = { ...doc, seq: { ...doc.seq } };
+        return { ...next, tasks: [...next.tasks, createTask(next, patch, { now })] };
+      });
+      state.editing = null;
+      app.render();
+    },
+
+    archiveTask(id) {
+      actions.update((doc) => ({
+        ...doc,
+        tasks: doc.tasks.map((t) => (t.id === id ? { ...t, archived: true } : t)),
+      }));
+      state.editing = null;
+      app.render();
+    },
   };
 
   function recoveryScreen(problem) {
@@ -83,11 +112,15 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       if (state.doc) {
         document.documentElement.dataset.accent = state.doc.settings.accentMode || 'standard';
       }
-      const ctx = { doc: state.doc, now: state.now, filter: state.filter, actions };
+      const ctx = { doc: state.doc, now: state.now, filter: state.filter,
+                    editing: state.editing, actions };
       const body = state.problem
         ? recoveryScreen(state.problem)
         : RENDERERS[state.screen](ctx);
-      mount(root, body, state.problem ? null : renderTabBar(ctx, SCREENS, state.screen));
+      const editor = !state.problem && state.editing?.kind === 'task'
+        ? renderTaskEditor(ctx, (state.doc.tasks || []).find((t) => t.id === state.editing.id) || null)
+        : null;
+      mount(root, body, editor, state.problem ? null : renderTabBar(ctx, SCREENS, state.screen));
     },
 
     async boot() {

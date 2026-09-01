@@ -74,3 +74,14 @@
 .chip[aria-pressed="true"] { color: var(--accent); border-color: var(--accent-dim); }
 
 .empty { display: block; padding: 24px 8px; color: var(--text-dim); }
+
+button.task-name {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: var(--tap);
+}
