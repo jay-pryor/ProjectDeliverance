@@ -160,8 +160,12 @@ export function createCapacitorBackend({ plugin = LocalNotifications } = {}) {
       }));
     },
 
+    /**
+     * @returns {Promise<{warning: string|null}>} non-fatal; the alarms are
+     *   scheduled either way, `warning` only says they may drift.
+     */
     async schedule(items) {
-      await plugin.schedule({
+      const result = await plugin.schedule({
         notifications: items.map((item) => ({
           id: item.id,
           title: item.title,
@@ -177,6 +181,19 @@ export function createCapacitorBackend({ plugin = LocalNotifications } = {}) {
           },
         })),
       });
+
+      // `ScheduleResult.warning` is set when an exact-wanting notification was
+      // silently downgraded to an inexact alarm — permission missing, not
+      // mandatory. It is the authoritative per-call signal that these specific
+      // reminders will drift, and it is worth more than the one-shot startup
+      // check because the permission can be revoked between launches. The
+      // plugin's own wording says what happened; this says what to do about it.
+      return {
+        warning: result && result.warning
+          ? 'Reminders were scheduled as inexact alarms, so they may arrive late. '
+            + 'Allow exact alarms in Android Settings → Apps → Tracker → Alarms & reminders.'
+          : null,
+      };
     },
 
     async cancel(ids) {

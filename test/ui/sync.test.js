@@ -176,3 +176,25 @@ test('a later successful sync clears a failure that has since gone away', async 
   await app.syncNotifications();
   assert.equal(app.state.notifyError, null, 'the stale reason is withdrawn');
 });
+
+test('a downgraded alarm reaches SETTINGS without failing the sync', async () => {
+  // The backend reports a warning alongside work it actually did. It must be
+  // visible — reminders that drift by a quarter of an hour teach the user the
+  // times cannot be trusted — but it must not read as a failure, because the
+  // notifications are scheduled and will fire.
+  // Asserted over boot's own sync — the first launch on a phone that has not
+  // granted exact alarms — because that is one sync, awaited. A change made
+  // afterwards would queue a second, no-op sync behind it, and a sync that
+  // writes nothing has no warning to report.
+  const { app, backend } = build();
+  const real = backend.schedule;
+  backend.schedule = async (items) => {
+    await real(items);
+    return { warning: 'Reminders were scheduled as inexact alarms.' };
+  };
+  await app.boot();
+
+  assert.equal(backend.scheduled.length, 14, 'the alarms were written');
+  assert.equal(app.state.notifyError, 'Reminders were scheduled as inexact alarms.');
+  assert.equal(app.state.problem, null, 'and nothing reads as a failure');
+});

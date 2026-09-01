@@ -6,83 +6,7 @@ import {
 import { createNotifier } from '../../src/platform/notifier.js';
 import { createEmptyDoc } from '../../src/core/schema.js';
 import { CHANNELS } from '../../src/core/schedule.js';
-
-/**
- * A fake standing in for @capacitor/local-notifications.
- *
- * It mirrors the real plugin's SHAPES exactly — `getAll()`/`getPending()`
- * returning `{notifications: [...]}`, `schedule()` taking `{notifications:
- * [...]}`, `cancel()` taking `{notifications: [{id}]}` — because the shapes are
- * the whole risk here. The logic above this layer is already proven; what is
- * unproven is whether we speak the plugin's dialect correctly, and a fake that
- * invented its own shapes would prove nothing at all.
- *
- * Critically it stores what it was HANDED separately from what it PROJECTS
- * back. The real plugin does not echo the scheduled object: it re-serialises it
- * through `LocalNotification.buildLocalNotificationPendingList`, which emits
- * only `id`, `title`, `body`, `schedule` and `extra` — no `channelId` — and
- * whose `schedule.at` is an Android `Date` that crosses the bridge as a string,
- * never a JS Date. A fake that echoed the input would certify code the real
- * plugin breaks, so it must not be able to.
- *
- * @param {{permission?: string, afterPrompt?: string, exact?: string}} [opts]
- *   `permission` is what checkPermissions() reports; `afterPrompt` is the
- *   user's answer to the dialog, which is NOT always 'granted'.
- */
-function fakePlugin({ permission = 'granted', afterPrompt = 'granted', exact = 'granted' } = {}) {
-  /** id → {sent: the object we were handed, triggered: has it fired}. */
-  const store = new Map();
-
-  /** Exactly the projection `buildLocalNotificationPendingList` performs. */
-  const project = (sent) => {
-    const out = { id: sent.id, title: sent.title, body: sent.body, extra: sent.extra };
-    if (sent.schedule) {
-      out.schedule = {
-        // A Date put into a JSObject reaches JS as its string form.
-        at: sent.schedule.at ? String(sent.schedule.at) : undefined,
-        repeats: false,
-      };
-    }
-    return out;
-  };
-
-  return {
-    calls: { channels: [], requested: 0, getAll: [] },
-
-    /** What the plugin was actually handed — not part of its API; the test seam. */
-    sent(id) { return store.get(id)?.sent ?? null; },
-    /** Mark a saved notification as already delivered. */
-    deliver(id) { const rec = store.get(id); if (rec) rec.triggered = true; },
-
-    async schedule({ notifications }) {
-      for (const n of notifications) store.set(n.id, { sent: n, triggered: false });
-      return { notifications: notifications.map((n) => ({ id: n.id })) };
-    },
-
-    // Every saved record, delivered ones included — `getPending()` is a misnomer
-    // in the Kotlin (`notificationStorage.getSavedNotifications()`, unfiltered).
-    async getPending() {
-      return { notifications: [...store.values()].map((r) => project(r.sent)) };
-    },
-
-    async getAll(options) {
-      this.calls.getAll.push(options);
-      const state = options && options.state;
-      const keep = ([, r]) => (state === 'SCHEDULED' ? !r.triggered
-        : state === 'TRIGGERED' ? r.triggered : true);
-      return { notifications: [...store.entries()].filter(keep).map(([, r]) => project(r.sent)) };
-    },
-
-    async cancel({ notifications }) {
-      for (const n of notifications) store.delete(n.id);
-    },
-
-    async createChannel(channel) { this.calls.channels.push(channel); },
-    async checkPermissions() { return { display: permission }; },
-    async requestPermissions() { this.calls.requested++; return { display: afterPrompt }; },
-    async checkExactNotificationSetting() { return { exact_alarm: exact }; },
-  };
-}
+import { fakePlugin } from './fake-plugin.js';
 
 const NOW = new Date(2026, 7, 31, 9, 0).getTime();
 
@@ -195,6 +119,28 @@ test('a plugin too old for getAll still adopts, rather than orphaning everything
   ] });
   delete plugin.getAll;
   assert.deepEqual(await createCapacitorBackend({ plugin }).list(), [{ id: 3, key: 'dig:2026-09-01' }]);
+});
+
+test('a downgraded alarm is reported, not swallowed and not raised', async () => {
+  // `ScheduleResult.warning` is the authoritative per-call signal that these
+  // notifications will drift — set whenever an exact-wanting alarm was silently
+  // made inexact. Discarding it left only the one-shot startup check, which
+  // cannot see a permission revoked between launches. It is not a failure: the
+  // alarms exist and will fire.
+  const plugin = fakePlugin({ inexact: true });
+  const item = { id: 1, key: 'k', title: 't', body: 'b', fireAt: NOW, channel: CHANNELS.ROUTINES };
+  const result = await createCapacitorBackend({ plugin }).schedule([item]);
+  assert.match(result.warning, /may arrive late/);
+  assert.match(result.warning, /Alarms & reminders/, 'and says where to fix it');
+  assert.equal(plugin.sent(1).id, 1, 'the notification was scheduled all the same');
+});
+
+test('an ordinary schedule reports no warning', async () => {
+  const plugin = fakePlugin();
+  const result = await createCapacitorBackend({ plugin }).schedule([
+    { id: 1, key: 'k', title: 't', body: 'b', fireAt: NOW, channel: CHANNELS.ROUTINES },
+  ]);
+  assert.equal(result.warning, null);
 });
 
 // --- channels and permissions ----------------------------------------------

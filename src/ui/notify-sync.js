@@ -52,7 +52,10 @@ export function createNotifySync({ backend, now, getDoc, onError, ready = Promis
           // rejected would otherwise escape as an unhandled rejection.
           await ready;
           const result = await notifier.sync(doc, now());
-          onError(null);
+          // A warning is a success with a caveat — the alarms were scheduled,
+          // just imprecisely — so it is reported through the same field and
+          // clears itself the moment a sync comes back clean.
+          onError((result && result.warning) || null);
           return result;
         } catch (err) {
           // `err` may be nullish. Some native bridges reject with no value at

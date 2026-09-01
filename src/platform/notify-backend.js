@@ -29,18 +29,27 @@ export function createNotifyBackend() {
  * because a notification's channel is fixed when it is posted and one posted to
  * an unregistered channel is dropped.
  *
- * Never throws. A phone that refuses permission is a phone with a working app
- * and no notifications, not a broken app — the caller surfaces the reason.
+ * Never throws — literally, including the host check, which used to sit outside
+ * the try and quietly made that claim untrue.
  *
+ * A phone that refuses permission is a phone with a working app and no
+ * notifications, not a broken app — the caller surfaces the reason.
+ *
+ * @param {{plugin?: object, native?: boolean}} [opts] injection, the same seam
+ *   `capacitor-notifier.js` uses: a fake plugin and an explicit host answer make
+ *   every branch below reachable in plain Node.
  * @returns {Promise<{ready: boolean, reason: string|null}>}
  */
-export async function prepareNotifications() {
-  if (!isNative()) return { ready: true, reason: null };
-
+export async function prepareNotifications({ plugin, native = isNative() } = {}) {
   try {
-    await registerChannels();
+    // In a browser — the development loop — there are no channels to register
+    // and no runtime permission to ask for.
+    if (!native) return { ready: true, reason: null };
 
-    const permission = await ensurePermission();
+    const opts = plugin ? { plugin } : {};
+    await registerChannels(opts);
+
+    const permission = await ensurePermission(opts);
     if (!permission.granted) {
       return {
         ready: false,
@@ -53,7 +62,7 @@ export async function prepareNotifications() {
       };
     }
 
-    const exact = await checkExactAlarms();
+    const exact = await checkExactAlarms(opts);
     if (!exact.exact) {
       // Not fatal: notifications still arrive, just batched by the OS to save
       // power, which can move a 09:00 routine by a quarter of an hour.
