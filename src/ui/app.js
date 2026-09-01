@@ -14,11 +14,13 @@ import { renderCalendar } from './calendar.js';
 import { renderSettings } from './settings.js';
 import { renderTaskEditor } from './task-editor.js';
 import { renderEventEditor } from './event-editor.js';
+import { renderRoutineEditor } from './routine-editor.js';
 import { createStore, createDebouncedWriter } from '../store/store.js';
 import { createStorage, SAVE_CADENCE } from '../platform/storage.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
 import { setStatus, createTask } from '../core/tasks.js';
 import { createEvent } from '../core/events.js';
+import { createRoutine } from '../core/routines.js';
 import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js';
 import { pruneDismissals } from '../core/signals.js';
 
@@ -153,6 +155,36 @@ export function createApp({ root, driver, now = Date.now } = {}) {
       state.editing = null;
       app.render();
     },
+
+    openRoutine(id) { state.editing = { kind: 'routine', id: id ?? null }; app.render(); },
+
+    saveRoutine(patch) {
+      const editing = state.editing;
+      actions.update((doc) => {
+        if (editing && editing.id) {
+          return { ...doc, routines: doc.routines.map((r) => (r.id === editing.id ? { ...r, ...patch } : r)) };
+        }
+        const next = { ...doc, seq: { ...doc.seq } };
+        return { ...next, routines: [...next.routines, createRoutine(next, patch, { now })] };
+      });
+      state.editing = null;
+      app.render();
+    },
+
+    archiveRoutine(id) {
+      actions.update((doc) => ({
+        ...doc, routines: doc.routines.map((r) => (r.id === id ? { ...r, archived: true } : r)),
+      }));
+      state.editing = null;
+      app.render();
+    },
+
+    /** Dismissals are append-only within a day; pruning happens at boot. */
+    dismissRoutine(key) {
+      actions.update((doc) => (doc.dismissals.includes(key)
+        ? doc
+        : { ...doc, dismissals: [...doc.dismissals, key] }));
+    },
   };
 
   function recoveryScreen(problem) {
@@ -188,6 +220,8 @@ export function createApp({ root, driver, now = Date.now } = {}) {
           ? renderTaskEditor(ctx, (state.doc.tasks || []).find((t) => t.id === state.editing.id) || null)
         : state.editing?.kind === 'event'
           ? renderEventEditor(ctx, (state.doc.events || []).find((e) => e.id === state.editing.id) || null)
+        : state.editing?.kind === 'routine'
+          ? renderRoutineEditor(ctx, (state.doc.routines || []).find((r) => r.id === state.editing.id) || null)
         : null;
       mount(root, body, editor, state.problem ? null : renderTabBar(ctx, SCREENS, state.screen));
     },
