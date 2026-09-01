@@ -12,6 +12,16 @@ import { liveProjects, PRIORITIES, STATUSES, TASK_FIELDS } from '../core/tasks.j
 /** Sentence-case for the three status ids, which are stored lowercase. */
 const STATUS_LABELS = { todo: 'To do', doing: 'Doing', done: 'Done' };
 
+/**
+ * The value of the trailing "make one" option.
+ *
+ * Real project ids are `prj_`-prefixed, so this can never collide with one —
+ * which matters because the select's value is read straight into `task.project`
+ * on save, and a sentinel that got through would be a dangling reference to a
+ * project that does not exist.
+ */
+const NEW_PROJECT = '__new__';
+
 function field(label, control) {
   return el('label', { class: 'field' }, [
     el('span', { class: 'label', text: label }),
@@ -32,7 +42,31 @@ export function renderTaskEditor(ctx, task) {
     ...liveProjects(ctx.doc).map((p) => el('option', {
       attrs: { value: p.id, selected: task?.project === p.id }, text: p.name,
     })),
+    el('option', { attrs: { value: NEW_PROJECT }, text: '+ New project…' }),
   ]);
+
+  // Inline rather than a separate screen: a project is worth creating at the
+  // moment you are filing a task and realise it needs a home, and a detour to
+  // make one first is how the thought gets lost. Nothing is created here — the
+  // name rides along on the patch and `saveTask` makes the project in the same
+  // document transform as the task, so neither can exist without the other.
+  const newProject = el('input', {
+    attrs: { name: 'newProject', type: 'text',
+             placeholder: 'Project name', autocomplete: 'off' },
+  });
+  const newProjectField = field('New project', newProject);
+  newProjectField.classList.add('new-project-field');
+  // `hidden`, not display:none — it takes the field out of the accessibility
+  // tree and out of tab order too, so a name box nobody asked for is not
+  // something a keyboard or a screen reader can land in.
+  newProjectField.hidden = true;
+  project.addEventListener('change', () => {
+    const wanted = project.value === NEW_PROJECT;
+    newProjectField.hidden = !wanted;
+    // Choosing the option IS the request to name one; making the user find and
+    // tap the box as well would be a second tap for nothing.
+    if (wanted) newProject.focus();
+  });
 
   // A segmented control rather than a select: three options is few enough to
   // show at once, and status is the field most likely to be changed on the way
@@ -70,10 +104,16 @@ export function renderTaskEditor(ctx, task) {
   });
 
   function save() {
+    const creating = project.value === NEW_PROJECT;
     ctx.actions.saveTask({
       name: name.value.trim() || TASK_FIELDS.name,
       status,
-      project: project.value || null,
+      // The sentinel is never written as an id. When a project is being made,
+      // its id is not known until saveTask has created it, so the patch names
+      // it instead and saveTask does the filing — including deciding that a
+      // blank name is not a project, which is its rule to keep, not this one's.
+      project: creating ? null : (project.value || null),
+      newProject: creating ? newProject.value : '',
       priority: priority.value,
       dueKey: due.value || null,
       detail: detail.value,
@@ -88,6 +128,7 @@ export function renderTaskEditor(ctx, task) {
     ]),
     field('Name', name),
     field('Project', project),
+    newProjectField,
     field('Status', statusControl),
     field('Priority', priority),
     field('Due', due),

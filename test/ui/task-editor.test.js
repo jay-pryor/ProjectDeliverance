@@ -158,5 +158,122 @@ test('the project select offers every live project plus unfiled', async () => {
   const { root } = await mount();
   root.querySelector('.add-task').click();
   const options = [...root.querySelectorAll('[name="project"] option')].map((o) => o.value);
-  assert.deepEqual(options, ['', 'prj_1']);
+  assert.deepEqual(options, ['', 'prj_1', '__new__'], 'unfiled, the live projects, then "make one"');
+});
+
+// --- creating a project inline ----------------------------------------------
+//
+// Projects existed in the data model with no way to make one, so the select
+// only ever offered "No project". These tests pin the one route that now
+// exists: name a project while filing the task that needed it.
+
+/**
+ * Pick the trailing "+ New project…" option and type a name into the input it
+ * reveals. Found by its label rather than by the sentinel value, so a test that
+ * runs against an editor with no such option fails on the missing option rather
+ * than on a null dereference three lines later.
+ */
+function chooseNewProject(root, name) {
+  const select = root.querySelector('[name="project"]');
+  const option = [...select.querySelectorAll('option')].at(-1);
+  assert.equal(option.textContent, '+ New project…', 'the last option offers a new project');
+  select.value = option.value;
+  select.dispatchEvent(new window.Event('change'));
+  const input = root.querySelector('[name="newProject"]');
+  assert.ok(input, 'choosing it reveals a name input');
+  if (name != null) input.value = name;
+  return input;
+}
+
+test('naming a new project on a new task creates it and files the task under it', async () => {
+  const { root, app } = await mount();
+  root.querySelector('.add-task').click();
+  root.querySelector('[name="name"]').value = 'Fit the door';
+  chooseNewProject(root, 'Garage');
+  root.querySelector('.editor-save').click();
+
+  assert.equal(app.state.doc.projects.length, 2, 'the project is created');
+  const project = app.state.doc.projects.at(-1);
+  assert.equal(project.name, 'Garage');
+  assert.equal(project.archived, false);
+  const task = app.state.doc.tasks.at(-1);
+  assert.equal(task.name, 'Fit the door');
+  assert.equal(task.project, project.id, 'and the task is filed under it, not left unfiled');
+});
+
+test('a new project can be added while editing a task that already exists', async () => {
+  const { root, app } = await mount();
+  root.querySelector('[data-task="tsk_1"] .task-name').click();
+  chooseNewProject(root, 'Loft');
+  root.querySelector('.editor-save').click();
+
+  assert.equal(app.state.doc.tasks.length, 1, 'editing still edits in place');
+  const project = app.state.doc.projects.at(-1);
+  assert.equal(project.name, 'Loft');
+  assert.equal(app.state.doc.tasks[0].project, project.id, 'the task moves to the new project');
+});
+
+test('a blank project name creates no project and leaves the task unfiled', async () => {
+  // Otherwise a stray tap on the option quietly litters the list with a project
+  // called "New project" that the user never asked for.
+  const { root, app } = await mount();
+  root.querySelector('.add-task').click();
+  root.querySelector('[name="name"]').value = 'Unfiled work';
+  chooseNewProject(root, '   ');
+  root.querySelector('.editor-save').click();
+
+  assert.equal(app.state.doc.projects.length, 1, 'no project is created');
+  const task = app.state.doc.tasks.at(-1);
+  assert.equal(task.name, 'Unfiled work');
+  assert.equal(task.project, null, 'and the sentinel is never written as an id');
+});
+
+test('a project created inline is offered the next time the editor opens', async () => {
+  const { root } = await mount();
+  root.querySelector('.add-task').click();
+  chooseNewProject(root, 'Garage');
+  root.querySelector('.editor-save').click();
+
+  root.querySelector('.add-task').click();
+  const options = [...root.querySelectorAll('[name="project"] option')];
+  assert.deepEqual(options.map((o) => o.textContent), ['No project', 'Shed', 'Garage', '+ New project…']);
+});
+
+test('a project and a task created in one save each get their own reference', async () => {
+  // Both create* calls allocate from doc.seq, which nextRef mutates in place.
+  // Run against separate copies and the project's increment is thrown away, so
+  // the next project created is handed P-1 all over again.
+  const { root, app } = await mount();
+  root.querySelector('.add-task').click();
+  chooseNewProject(root, 'Garage');
+  root.querySelector('.editor-save').click();
+
+  assert.equal(app.state.doc.projects.at(-1).ref, 'P-1');
+  assert.equal(app.state.doc.tasks.at(-1).ref, 'T-3', 'the task ref still continues the sequence');
+  assert.deepEqual(app.state.doc.seq, { task: 3, project: 1 });
+
+  root.querySelector('.add-task').click();
+  chooseNewProject(root, 'Cellar');
+  root.querySelector('.editor-save').click();
+
+  assert.equal(app.state.doc.projects.at(-1).ref, 'P-2', 'the second project does not reuse P-1');
+  assert.equal(app.state.doc.tasks.at(-1).ref, 'T-4');
+  assert.deepEqual(app.state.doc.seq, { task: 4, project: 2 });
+});
+
+test('the new-project name input stays out of the way until it is asked for', async () => {
+  const { root } = await mount();
+  root.querySelector('.add-task').click();
+  const field = root.querySelector('.new-project-field');
+  assert.ok(field, 'the field exists in the form');
+  assert.equal(field.hidden, true, 'hidden until a new project is wanted');
+
+  const input = chooseNewProject(root, null);
+  assert.equal(field.hidden, false, 'revealed on choosing the option');
+  assert.equal(document.activeElement, input, 'and focused, so typing can start straight away');
+
+  const select = root.querySelector('[name="project"]');
+  select.value = '';
+  select.dispatchEvent(new window.Event('change'));
+  assert.equal(field.hidden, true, 'hidden again on choosing a real project');
 });

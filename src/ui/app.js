@@ -22,7 +22,7 @@ import { createNotifyBackend } from '../platform/notify-backend.js';
 import { createNotifySync } from './notify-sync.js';
 import { createSettingsActions } from './settings-actions.js';
 import { createEmptyDoc, validateDoc, migrate } from '../core/schema.js';
-import { setStatus, createTask } from '../core/tasks.js';
+import { setStatus, createTask, createProject } from '../core/tasks.js';
 import { createEvent } from '../core/events.js';
 import { createRoutine } from '../core/routines.js';
 import { todayKey, addDays, parseDateKey, dateKey } from '../core/time.js';
@@ -154,19 +154,38 @@ export function createApp({ root, driver, now = Date.now, backend, ready } = {})
     closeEditor() { state.editing = null; app.render(); },
     openEvent(id) { state.editing = { kind: 'event', id: id ?? null }; app.render(); },
 
-    /** Create or update, decided by whether the editor was opened on an id. */
+    /**
+     * Create or update, decided by whether the editor was opened on an id.
+     *
+     * `patch.newProject` names a project to create with the task — in this one
+     * transform, and in BOTH branches, since one can be named while editing a
+     * task that already exists. Made here rather than by the editor so a project
+     * cannot outlive a save that never happened, and so the task is filed under
+     * it in the same step rather than by a second write that could be missed.
+     */
     saveTask(patch) {
       const editing = state.editing;
       actions.update((doc) => {
-        if (editing && editing.id) {
-          return {
-            ...doc,
-            tasks: doc.tasks.map((t) => (t.id === editing.id ? withPatch(t, patch, now) : t)),
-          };
-        }
+        const { newProject, ...fields } = patch;
+        // One seq copy covers both create* calls: nextRef mutates seq in place,
+        // and update() must stay a pure doc → doc transform.
         const next = withFreshSeq(doc);
-        const created = withPatch(createTask(next, {}, { now }), patch, now);
-        return { ...next, tasks: [...next.tasks, created] };
+        // A blank name means the option was chosen and nothing typed: leave the
+        // task unfiled rather than make a "New project" nobody asked for.
+        const name = typeof newProject === 'string' ? newProject.trim() : '';
+        let applied = fields;
+        let projects = next.projects;
+
+        if (name) {
+          const project = createProject(next, { name }, { now });
+          projects = [...projects, project];
+          applied = { ...fields, project: project.id };
+        }
+
+        const tasks = editing && editing.id
+          ? next.tasks.map((t) => (t.id === editing.id ? withPatch(t, applied, now) : t))
+          : [...next.tasks, withPatch(createTask(next, {}, { now }), applied, now)];
+        return { ...next, projects, tasks };
       });
       state.editing = null;
       app.render();
@@ -238,14 +257,9 @@ export function createApp({ root, driver, now = Date.now, backend, ready } = {})
         : { ...doc, dismissals: [...doc.dismissals, key] }));
     },
 
-    // setSetting, exportDoc and importDoc. Handed `update` rather than the
-    // state: they are lazy closures, so referring to `actions` while it is
-    // still being built is safe — nothing calls them until the app is running.
-    ...createSettingsActions({
-      update: (fn) => actions.update(fn),
-      getDoc: () => state.doc,
-      now,
-    }),
+    // setSetting, exportDoc and importDoc. Lazy closures, so naming `actions`
+    // while it is still being built is safe — nothing calls them before boot.
+    ...createSettingsActions({ update: (fn) => actions.update(fn), getDoc: () => state.doc, now }),
   };
 
   const app = {
