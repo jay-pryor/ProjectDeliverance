@@ -1558,6 +1558,19 @@ const RENDERERS = {
 };
 
 /**
+ * A copy of the document whose `seq` is safe to allocate a reference from.
+ *
+ * `nextRef` increments `doc.seq` IN PLACE, so every `create*` call has to run
+ * against a copy or it mutates the live document as a side effect of what is
+ * supposed to be a pure `doc → doc` transform. Three actions need this, so the
+ * reason is stated once here rather than three times in comments that can drift
+ * apart.
+ */
+function withFreshSeq(doc) {
+  return { ...doc, seq: { ...doc.seq } };
+}
+
+/**
  * Apply an editor patch to a task.
  *
  * A status change is routed through `setStatus` rather than spread in, so
@@ -2611,9 +2624,7 @@ Add `editing: null` to `state`. Add to `actions`:
             tasks: doc.tasks.map((t) => (t.id === editing.id ? withPatch(t, patch, now) : t)),
           };
         }
-        // createTask mutates doc.seq to allocate a ref, so it runs against a
-        // copy — update() must stay a pure doc → doc transform.
-        const next = { ...doc, seq: { ...doc.seq } };
+        const next = withFreshSeq(doc);
         const created = withPatch(createTask(next, {}, { now }), patch, now);
         return { ...next, tasks: [...next.tasks, created] };
       });
@@ -4396,7 +4407,7 @@ export function renderEventEditor(ctx, event) {
 
 - [ ] **Step 5: Add the actions and route the editor**
 
-In `src/ui/app.js`, add `saveEvent` and `archiveEvent` mirroring `saveTask` / `archiveTask` exactly, but over `doc.events` and calling `createEvent(next, patch, { now })`. Import `createEvent` from `../core/events.js` and `renderEventEditor` from `./event-editor.js`.
+In `src/ui/app.js`, add `saveEvent` and `archiveEvent` mirroring `saveTask` / `archiveTask` exactly, but over `doc.events` and calling `createEvent(next, patch, { now })`. Use the shared `withFreshSeq(doc)` helper for the copy rather than spreading `seq` inline. Import `createEvent` from `../core/events.js` and `renderEventEditor` from `./event-editor.js`.
 
 Extend the editor selection in `render()`:
 
@@ -4549,7 +4560,7 @@ Expected: FAIL — no `[data-routine]` on TODAY.
         if (editing && editing.id) {
           return { ...doc, routines: doc.routines.map((r) => (r.id === editing.id ? { ...r, ...patch } : r)) };
         }
-        const next = { ...doc, seq: { ...doc.seq } };
+        const next = withFreshSeq(doc);
         return { ...next, routines: [...next.routines, createRoutine(next, patch, { now })] };
       });
       state.editing = null;
